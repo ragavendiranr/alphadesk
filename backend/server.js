@@ -29,12 +29,6 @@ const reportRoutes    = require('./src/routes/reports');
 
 const app    = express();
 const server = http.createServer(app);
-const io     = new Server(server, {
-  cors: {
-    origin: allowedOrigins,
-    methods: ['GET', 'POST'],
-  },
-});
 
 // ── Security & Middleware ─────────────────────────────────────────────────────
 app.use(helmet());
@@ -43,6 +37,13 @@ const allowedOrigins = [
   'http://localhost:3000',
   'https://alphadesk.vercel.app',
 ].filter(Boolean);
+
+const io = new Server(server, {
+  cors: {
+    origin: allowedOrigins,
+    methods: ['GET', 'POST'],
+  },
+});
 
 app.use(cors({
   origin: (origin, cb) => {
