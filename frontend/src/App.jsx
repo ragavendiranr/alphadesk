@@ -54,6 +54,7 @@ export default function App() {
 
   // Auth
   const login = async () => {
+    setLoginErr('');
     try {
       const { data } = await axios.post(`${BACKEND_URL}/api/auth/login`, {
         username: loginForm.user, password: loginForm.pass,
@@ -61,8 +62,14 @@ export default function App() {
       localStorage.setItem('alphadesk_token', data.token);
       setAuthHeader(data.token);
       setToken(data.token);
-    } catch {
-      setLoginErr('Invalid credentials');
+    } catch (e) {
+      if (e.response?.status === 401) {
+        setLoginErr('Invalid credentials — use DWU300 / your password');
+      } else if (e.code === 'ERR_NETWORK' || !e.response) {
+        setLoginErr('Cannot reach server — check backend URL');
+      } else {
+        setLoginErr(e.response?.data?.error || 'Login failed');
+      }
     }
   };
 
