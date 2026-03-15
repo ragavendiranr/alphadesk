@@ -37,20 +37,32 @@ class ZerodhaClient {
       const requestId = loginResp.data?.data?.request_id;
       if (!requestId) throw new Error('Login failed: no request_id');
 
-      // Step 2: Submit TOTP
-      const totpResp = await axios.post(
-        'https://kite.zerodha.com/api/twofa',
-        new URLSearchParams({
-          user_id:    process.env.ZERODHA_CLIENT_ID,
-          request_id: requestId,
-          twofa_value: totp,
-          twofa_type:  'totp',
-          skip_session: '',
-        }),
-        { headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, withCredentials: true }
-      );
-
-      const requestToken = totpResp.data?.data?.request_token || totpResp.headers?.location?.split('request_token=')[1]?.split('&')[0];
+      // Step 2: Submit TOTP — disable redirects so we can capture request_token from Location header
+      let requestToken;
+      try {
+        const totpResp = await axios.post(
+          'https://kite.zerodha.com/api/twofa',
+          new URLSearchParams({
+            user_id:    process.env.ZERODHA_CLIENT_ID,
+            request_id: requestId,
+            twofa_value: totp,
+            twofa_type:  'totp',
+            skip_session: '',
+          }),
+          {
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            withCredentials: true,
+            maxRedirects: 0,
+            validateStatus: s => s < 400,
+          }
+        );
+        requestToken = totpResp.data?.data?.request_token
+          || totpResp.headers?.location?.split('request_token=')[1]?.split('&')[0];
+      } catch (redirectErr) {
+        // axios throws on 3xx when maxRedirects=0; extract from error response headers
+        const loc = redirectErr.response?.headers?.location || '';
+        requestToken = loc.split('request_token=')[1]?.split('&')[0];
+      }
       if (!requestToken) throw new Error('TOTP auth failed: no request_token');
 
       // Step 3: Exchange request token for access token
