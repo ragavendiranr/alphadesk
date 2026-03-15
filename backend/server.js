@@ -36,18 +36,28 @@ const allowedOrigins = [
   process.env.FRONTEND_URL,
   'http://localhost:3000',
   'https://alphadesk.vercel.app',
+  'https://alphadesk-ragavendiranr.vercel.app',
 ].filter(Boolean);
+
+const isAllowedOrigin = (origin) => {
+  if (!origin) return true;
+  if (allowedOrigins.some(o => origin.startsWith(o))) return true;
+  // Allow any Vercel preview deployment for this project
+  if (/^https:\/\/alphadesk-[a-z0-9]+-ragavenditras-projects\.vercel\.app$/.test(origin)) return true;
+  return false;
+};
 
 const io = new Server(server, {
   cors: {
-    origin: allowedOrigins,
+    origin: (origin, cb) => cb(null, isAllowedOrigin(origin)),
     methods: ['GET', 'POST'],
+    credentials: true,
   },
 });
 
 app.use(cors({
   origin: (origin, cb) => {
-    if (!origin || allowedOrigins.some(o => origin.startsWith(o))) return cb(null, true);
+    if (isAllowedOrigin(origin)) return cb(null, true);
     cb(new Error('CORS blocked'));
   },
   credentials: true,
