@@ -22,8 +22,6 @@
     "mongoose": "^8.0.3",
     "node-cron": "^3.0.3",
     "node-telegram-bot-api": "^0.64.0",
-    "optuna": "^0.1.0",
-    "pyotp": "^1.0.1",
     "socket.io": "^4.6.1",
     "speakeasy": "^2.0.0",
     "winston": "^3.11.0",

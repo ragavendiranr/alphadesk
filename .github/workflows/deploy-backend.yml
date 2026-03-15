@@ -1,0 +1,36 @@
+name: Deploy Backend to Railway
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'backend/**'
+      - 'database/**'
+      - 'execution/**'
+      - 'risk-manager/**'
+      - 'scheduler/**'
+      - 'strategies/**'
+      - 'telegram-bot/**'
+      - 'package.json'
+      - 'railway.json'
+      - 'nixpacks.toml'
+      - 'Procfile'
+  workflow_dispatch:
+
+jobs:
+  deploy-backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Deploy Backend to Railway
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          railway up \
+            --service bcab0962-9664-4606-9a27-6f9ce3edfbde \
+            --environment f14ed114-72ce-4101-a46c-b8cb52403ea1 \
+            --detach

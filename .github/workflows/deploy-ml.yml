@@ -1,0 +1,26 @@
+name: Deploy ML Engine to Railway
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'ml-engine/**'
+  workflow_dispatch:
+
+jobs:
+  deploy-ml:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Deploy ML Engine to Railway
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          railway up \
+            --service ${{ secrets.ML_SERVICE_ID }} \
+            --environment f14ed114-72ce-4101-a46c-b8cb52403ea1 \
+            --detach
