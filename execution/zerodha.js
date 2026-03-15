@@ -5,7 +5,8 @@ const speakeasy        = require('speakeasy');
 const axios            = require('axios');
 const logger           = require('../backend/src/config/logger');
 
-const KITE_API = 'https://api.kite.trade';
+const KITE_API     = 'https://api.kite.trade';
+const KITE_OMS_API = 'https://kite.zerodha.com/oms';
 
 class ZerodhaClient {
   constructor() {
@@ -25,9 +26,11 @@ class ZerodhaClient {
 
   // Make authenticated request to Kite REST API
   async _req(method, path, params = {}) {
+    // Use OMS API with enctoken, KiteConnect API with access_token
+    const baseUrl = this.enctoken ? KITE_OMS_API : KITE_API;
     const cfg = {
       method,
-      url: `${KITE_API}${path}`,
+      url: `${baseUrl}${path}`,
       headers: {
         'X-Kite-Version': '3',
         'Authorization': this._authHeader(),
