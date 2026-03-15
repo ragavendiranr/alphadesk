@@ -58,15 +58,15 @@ export default function App() {
     try {
       const { data } = await axios.post(`${BACKEND_URL}/api/auth/login`, {
         username: loginForm.user, password: loginForm.pass,
-      });
+      }, { timeout: 15000 });
       localStorage.setItem('alphadesk_token', data.token);
       setAuthHeader(data.token);
       setToken(data.token);
     } catch (e) {
       if (e.response?.status === 401) {
         setLoginErr('Invalid credentials — use DWU300 / your password');
-      } else if (e.code === 'ERR_NETWORK' || !e.response) {
-        setLoginErr('Cannot reach server — check backend URL');
+      } else if (e.code === 'ERR_NETWORK' || e.code === 'ECONNABORTED' || !e.response) {
+        setLoginErr(`Server unreachable — try again or check: ${BACKEND_URL}/health`);
       } else {
         setLoginErr(e.response?.data?.error || 'Login failed');
       }
