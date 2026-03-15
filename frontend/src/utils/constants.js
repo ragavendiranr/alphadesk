@@ -1,5 +1,5 @@
-export const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || '';
-export const WS_URL      = import.meta.env.VITE_WS_URL      || '';
+export const BACKEND_URL = "";
+export const WS_URL      = "";
 
 export const WATCHED_SYMBOLS = [
   'NIFTY 50', 'NIFTY BANK',
@@ -26,3 +26,4 @@ export const SENTIMENT_COLORS = {
   BEARISH: '#ef4444',
   NEUTRAL: '#f59e0b',
 };
+
