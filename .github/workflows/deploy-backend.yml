@@ -8,11 +8,6 @@ on:
 jobs:
   deploy-backend:
     runs-on: ubuntu-latest
-    env:
-      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-      RAILWAY_PROJECT_ID: eac5bd92-137c-4515-a4ff-fb19554e09b2
-      RAILWAY_SERVICE_ID: e04e5a6c-468b-4a56-a5f8-06b60be91260
-      RAILWAY_ENVIRONMENT_ID: f14ed114-72ce-4101-a46c-b8cb52403ea1
     steps:
       - uses: actions/checkout@v4
 
@@ -20,4 +15,6 @@ jobs:
         run: npm install -g @railway/cli
 
       - name: Deploy to Railway
-        run: railway up --service $RAILWAY_SERVICE_ID --environment $RAILWAY_ENVIRONMENT_ID --detach
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: railway up --service alphadesk-backend --detach
