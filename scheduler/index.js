@@ -10,6 +10,8 @@ const reportService = () => require('../backend/src/services/reportService');
 const riskMgr       = () => require('../risk-manager');
 const telegramBot   = () => require('../telegram-bot/bot');
 const { OHLC, DailySession, Budget, MarketRegime, SentimentScore } = require('../database/schemas');
+const marketIntelSvc = () => require('../backend/src/services/marketIntelligenceService');
+const investSvc      = () => require('../backend/src/services/investmentService');
 
 const WATCHED_SYMBOLS = [
   'NIFTY 50', 'NIFTY BANK',
@@ -219,6 +221,53 @@ cron.schedule('0 20 * * 0', async () => {
     await reportService().sendTelegramReport('weekly');
   } catch (err) {
     logger.error(`Weekly report failed: ${err.message}`, { module: 'scheduler' });
+  }
+}, { timezone: IST });
+
+// ── 13. Every 30 min — News refresh (8 AM to 8 PM) ───────────────────────────
+cron.schedule('*/30 8-20 * * *', async () => {
+  logger.info('Scheduler: Refreshing India & Global news', { module: 'scheduler' });
+  try {
+    await Promise.all([
+      marketIntelSvc().fetchIndiaNews(),
+      marketIntelSvc().fetchGlobalNews(),
+    ]);
+  } catch (err) {
+    logger.error(`News refresh failed: ${err.message}`, { module: 'scheduler' });
+  }
+}, { timezone: IST });
+
+// ── 14. Daily 18:00 IST — FII/DII fetch ──────────────────────────────────────
+cron.schedule('0 18 * * 1-5', async () => {
+  logger.info('Scheduler: Fetching FII/DII data', { module: 'scheduler' });
+  try {
+    const results = await marketIntelSvc().fetchFiiDii();
+    logger.info(`FII/DII stored: ${results.length} days`, { module: 'scheduler' });
+  } catch (err) {
+    logger.error(`FII/DII fetch failed: ${err.message}`, { module: 'scheduler' });
+  }
+}, { timezone: IST });
+
+// ── 15. Sunday 07:00 — Investment stock fundamentals refresh ──────────────────
+cron.schedule('0 7 * * 0', async () => {
+  logger.info('Scheduler: Seeding/refreshing investment stocks', { module: 'scheduler' });
+  try {
+    await investSvc().seedStocks();
+    await investSvc().refreshStockPrices();
+    logger.info('Investment stocks refreshed', { module: 'scheduler' });
+  } catch (err) {
+    logger.error(`Investment refresh failed: ${err.message}`, { module: 'scheduler' });
+  }
+}, { timezone: IST });
+
+// ── 16. Daily 08:00 IST — Investment price refresh ────────────────────────────
+cron.schedule('0 8 * * 1-5', async () => {
+  logger.info('Scheduler: Refreshing investment stock prices', { module: 'scheduler' });
+  try {
+    const count = await investSvc().refreshStockPrices();
+    logger.info(`Investment prices refreshed: ${count}`, { module: 'scheduler' });
+  } catch (err) {
+    logger.error(`Investment price refresh failed: ${err.message}`, { module: 'scheduler' });
   }
 }, { timezone: IST });
 

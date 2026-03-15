@@ -17,6 +17,8 @@ import BudgetModal    from './components/BudgetModal';
 import AIJournal      from './components/AIJournal';
 import GreeksPanel    from './components/GreeksPanel';
 import OrderFlowPanel from './components/OrderFlowPanel';
+import MarketIntelligencePanel from './components/MarketIntelligencePanel';
+import InvestPanel     from './components/InvestPanel';
 
 import useWebSocket   from './hooks/useWebSocket';
 import useTrades      from './hooks/useTrades';
@@ -30,7 +32,7 @@ const setAuthHeader = (token) => {
 const TABS = [
   'Dashboard', 'Signals', 'Trades', 'ML Engine',
   'Regime', 'Sentiment', 'Backtest', 'Options',
-  'Journal', 'Risk', 'Settings',
+  'Journal', 'Risk', 'News & Market', 'Invest', 'Settings',
 ];
 
 export default function App() {
@@ -290,6 +292,10 @@ export default function App() {
             </div>
           </div>
         )}
+
+        {tab === 'News & Market' && <MarketIntelligencePanel token={token} />}
+
+        {tab === 'Invest' && <InvestPanel token={token} />}
 
         {tab === 'Settings' && (
           <div style={{ maxWidth: 500 }}>

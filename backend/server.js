@@ -26,6 +26,8 @@ const backtestRoutes  = require('./src/routes/backtest');
 const sentimentRoutes = require('./src/routes/sentiment');
 const regimeRoutes    = require('./src/routes/regime');
 const reportRoutes    = require('./src/routes/reports');
+const marketIntelRoutes = require('./src/routes/marketIntelligence');
+const investRoutes    = require('./src/routes/invest');
 
 const app    = express();
 const server = http.createServer(app);
@@ -76,7 +78,9 @@ app.use('/api/ml',        mlRoutes);
 app.use('/api/backtest',  backtestRoutes);
 app.use('/api/sentiment', sentimentRoutes);
 app.use('/api/regime',    regimeRoutes);
-app.use('/api/reports',   reportRoutes);
+app.use('/api/reports',      reportRoutes);
+app.use('/api/market-intel', marketIntelRoutes);
+app.use('/api/invest',       investRoutes);
 
 // ── Health endpoint ───────────────────────────────────────────────────────────
 app.get('/health', async (req, res) => {

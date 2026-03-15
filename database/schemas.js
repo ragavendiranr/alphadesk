@@ -251,6 +251,84 @@ const backtestSchema = new mongoose.Schema({
   runBy:        String,
 }, { timestamps: true });
 
+// ── 13. FII/DII DATA ──────────────────────────────────────────────────────────
+const fiiDiiSchema = new mongoose.Schema({
+  date:          { type: String, required: true, unique: true }, // YYYY-MM-DD
+  fii: {
+    grossBuy:    Number,
+    grossSell:   Number,
+    net:         Number,
+  },
+  dii: {
+    grossBuy:    Number,
+    grossSell:   Number,
+    net:         Number,
+  },
+  rawData:       mongoose.Schema.Types.Mixed,
+}, { timestamps: true });
+fiiDiiSchema.index({ date: -1 });
+
+// ── 14. MARKET NEWS ───────────────────────────────────────────────────────────
+const marketNewsSchema = new mongoose.Schema({
+  source:        String,
+  headline:      { type: String, required: true },
+  url:           String,
+  publishedAt:   Date,
+  category:      { type: String, enum: ['INDIA', 'GLOBAL'], default: 'INDIA' },
+  sentiment:     { type: String, enum: ['BULLISH', 'BEARISH', 'NEUTRAL'], default: 'NEUTRAL' },
+  sentimentNote: String,
+  fetchedAt:     { type: Date, default: Date.now },
+}, { timestamps: true });
+marketNewsSchema.index({ publishedAt: -1, category: 1 });
+
+// ── 15. INVESTMENT STOCK ──────────────────────────────────────────────────────
+const investmentStockSchema = new mongoose.Schema({
+  symbol:              { type: String, required: true, unique: true },
+  name:                String,
+  sector:              String,
+  capCategory:         { type: String, enum: ['MICRO', 'SMALL', 'MID', 'LARGE'] },
+  currentPrice:        Number,
+  priceUpdatedAt:      Date,
+  marketCapCrores:     Number,
+  peRatio:             Number,
+  pbRatio:             Number,
+  dividendYieldPct:    Number,
+  roePct:              Number,
+  rocePct:             Number,
+  debtToEquity:        Number,
+  revenueGrowth3yr:    Number,
+  profitGrowth3yr:     Number,
+  promoterHoldingPct:  Number,
+  fiiHoldingPct:       Number,
+  diiHoldingPct:       Number,
+  companyThesis:       String,
+  futureGoals:         String,
+  aiScore:             { type: Number, default: 0 },
+  aiRating:            { type: String, enum: ['BUY', 'HOLD', 'WATCH'], default: 'HOLD' },
+  lastUpdated:         { type: Date, default: Date.now },
+}, { timestamps: true });
+
+// ── 16. INVESTMENT PORTFOLIO ──────────────────────────────────────────────────
+const investPortfolioSchema = new mongoose.Schema({
+  symbol:      { type: String, required: true },
+  name:        String,
+  quantity:    { type: Number, required: true },
+  buyPrice:    { type: Number, required: true },
+  buyDate:     { type: Date, required: true },
+  currentPrice: Number,
+  priceUpdatedAt: Date,
+}, { timestamps: true });
+
+// ── 17. AI RECOMMENDATION CACHE ───────────────────────────────────────────────
+const aiRecommendationSchema = new mongoose.Schema({
+  cacheKey:      { type: String, required: true, unique: true },
+  capFilter:     String,
+  sectorFilter:  String,
+  response:      mongoose.Schema.Types.Mixed,
+  cachedAt:      { type: Date, default: Date.now },
+  expiresAt:     Date,
+}, { timestamps: true });
+
 // ── Export all models ─────────────────────────────────────────────────────────
 module.exports = {
   OHLC:              mongoose.model('OHLC',             ohlcSchema),
@@ -265,4 +343,9 @@ module.exports = {
   SentimentScore:    mongoose.model('SentimentScore',   sentimentSchema),
   TradeJournal:      mongoose.model('TradeJournal',     tradeJournalSchema),
   BacktestResult:    mongoose.model('BacktestResult',   backtestSchema),
+  FiiDiiData:        mongoose.model('FiiDiiData',       fiiDiiSchema),
+  MarketNews:        mongoose.model('MarketNews',       marketNewsSchema),
+  InvestmentStock:   mongoose.model('InvestmentStock',  investmentStockSchema),
+  InvestPortfolio:   mongoose.model('InvestPortfolio',  investPortfolioSchema),
+  AiRecommendation:  mongoose.model('AiRecommendation', aiRecommendationSchema),
 };
