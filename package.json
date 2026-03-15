@@ -1,0 +1,14 @@
+{
+  "name": "alphadesk",
+  "version": "1.0.0",
+  "description": "AlphaDesk NSE Algorithmic Trading System",
+  "main": "backend/server.js",
+  "scripts": {
+    "start": "node backend/server.js",
+    "install:backend": "cd backend && npm install",
+    "postinstall": "cd backend && npm install"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

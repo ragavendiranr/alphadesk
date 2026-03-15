@@ -1,0 +1,45 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: ../deployment/Dockerfile.backend
+    ports:
+      - "4000:4000"
+    env_file: ./.env
+    depends_on:
+      - ml-engine
+    restart: unless-stopped
+    volumes:
+      - ./logs:/app/logs
+
+  ml-engine:
+    build:
+      context: ./ml-engine
+      dockerfile: ../deployment/Dockerfile.ml
+    ports:
+      - "5001:5001"
+    env_file: ./.env
+    restart: unless-stopped
+    volumes:
+      - ./ml-engine/src/models/saved:/app/src/models/saved
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: ../deployment/Dockerfile.frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  telegram-bot:
+    build:
+      context: .
+      dockerfile: ./deployment/Dockerfile.bot
+    env_file: ./.env
+    depends_on:
+      - backend
+    restart: unless-stopped
