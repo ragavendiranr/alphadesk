@@ -3,16 +3,15 @@ const express = require('express');
 const router  = express.Router();
 const { authenticate } = require('../middleware/auth');
 const { ActivityLog }  = require('../../../database/schemas');
-const { isMarketOpen, getTodaySignalStats, SCAN_SYMBOLS } = require('../services/techSignalService');
+const { isMarketOpen, getIST, getTodaySignalStats, SCAN_SYMBOLS } = require('../services/techSignalService');
 
 // ── GET /api/system/status ─────────────────────────────────────────────────────
 router.get('/status', authenticate, async (req, res) => {
   try {
-    const now = new Date();
-    const ist = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
-    const h = ist.getHours(), m = ist.getMinutes();
+    const ist = getIST();
+    const h = ist.getUTCHours(), m = ist.getUTCMinutes();
     const mins = h * 60 + m;
-    const day  = ist.getDay();
+    const day  = ist.getUTCDay();
     const isWeekend = day === 0 || day === 6;
 
     // Market status

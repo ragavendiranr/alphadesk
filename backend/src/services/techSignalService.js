@@ -3,12 +3,18 @@ const axios  = require('axios');
 const logger = require('../config/logger');
 
 // ── IST market hours helpers ───────────────────────────────────────────────────
+function getIST() {
+  // Reliable IST: add UTC+5:30 offset directly, use getUTC* methods
+  const utcMs = Date.now();
+  const istMs = utcMs + (5 * 60 + 30) * 60 * 1000;
+  return new Date(istMs);
+}
+
 function isMarketOpen() {
-  const now = new Date();
-  const ist = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
-  const day = ist.getDay(); // 0=Sun,6=Sat
+  const ist = getIST();
+  const day = ist.getUTCDay(); // 0=Sun, 6=Sat
   if (day === 0 || day === 6) return false;
-  const h = ist.getHours(), m = ist.getMinutes();
+  const h = ist.getUTCHours(), m = ist.getUTCMinutes();
   const mins = h * 60 + m;
   return mins >= 9 * 60 + 15 && mins <= 15 * 60 + 30;
 }
@@ -352,4 +358,4 @@ async function getTodaySignalStats() {
   }
 }
 
-module.exports = { runTASignalScan, getTodaySignalStats, analyseSymbol, isMarketOpen, SCAN_SYMBOLS, logActivity };
+module.exports = { runTASignalScan, getTodaySignalStats, analyseSymbol, isMarketOpen, getIST, SCAN_SYMBOLS, logActivity };
