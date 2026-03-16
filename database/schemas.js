@@ -339,6 +339,7 @@ const activityLogSchema = new mongoose.Schema({
 }, { timestamps: false });
 activityLogSchema.index({ time: -1 });
 
+
 // ── Export all models ─────────────────────────────────────────────────────────
 module.exports = {
   OHLC:              mongoose.model('OHLC',             ohlcSchema),

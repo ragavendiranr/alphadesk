@@ -3,9 +3,9 @@
   "outputDirectory": "dist",
   "framework": "vite",
   "rewrites": [
-    { "source": "/api/:path*",    "destination": "https://alphadesk-backend-production-3d1c.up.railway.app/api/:path*" },
-    { "source": "/health",        "destination": "https://alphadesk-backend-production-3d1c.up.railway.app/health" },
+    { "source": "/api/:path*",       "destination": "https://alphadesk-backend-production-3d1c.up.railway.app/api/:path*" },
+    { "source": "/health",           "destination": "https://alphadesk-backend-production-3d1c.up.railway.app/health" },
     { "source": "/socket.io/:path*", "destination": "https://alphadesk-backend-production-3d1c.up.railway.app/socket.io/:path*" },
-    { "source": "/(.*)",          "destination": "/index.html" }
+    { "source": "/(.*)",             "destination": "/index.html" }
   ]
 }
