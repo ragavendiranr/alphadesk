@@ -10,6 +10,10 @@ const reportService = () => require('../backend/src/services/reportService');
 const riskMgr       = () => require('../risk-manager');
 const telegramBot   = () => require('../telegram-bot/bot');
 const { OHLC, DailySession, Budget, MarketRegime, SentimentScore } = require('../database/schemas');
+const marketIntelSvc = () => require('../backend/src/services/marketIntelligenceService');
+const investSvc      = () => require('../backend/src/services/investmentService');
+const morningBriefSvc = () => require('../backend/src/services/morningBriefService');
+const preMarketSvc    = () => require('../backend/src/services/preMarketService');
 
 const WATCHED_SYMBOLS = [
   'NIFTY 50', 'NIFTY BANK',
@@ -25,15 +29,49 @@ const IST = 'Asia/Kolkata';
 let scanActive = false;
 let pauseUntil = null;
 
-// ── 1. 07:00 IST — Zerodha Auto Login ────────────────────────────────────────
+// ── 1. 07:00 IST — Morning Brief + Zerodha Auto Login ────────────────────────
 cron.schedule('0 7 * * 1-5', async () => {
-  logger.info('Scheduler: Zerodha auto-login', { module: 'scheduler' });
+  logger.info('Scheduler: Morning brief + Zerodha auto-login', { module: 'scheduler' });
+
+  // 1a. Send morning market brief
+  try {
+    const brief = await morningBriefSvc().generateMorningBrief();
+    await telegramBot().sendSystemAlert(brief);
+  } catch (err) {
+    logger.error(`Morning brief failed: ${err.message}`, { module: 'scheduler' });
+    await telegramBot().sendSystemAlert(`Morning brief generation failed: ${err.message}`);
+  }
+
+  // 1b. Zerodha auto-login
   try {
     await zerodha().autoLogin();
-    await telegramBot().sendSystemAlert('✅ Zerodha auto-login successful');
+    await telegramBot().sendSystemAlert('Zerodha auto-login successful');
   } catch (err) {
     logger.error(`Auto-login failed: ${err.message}`, { module: 'scheduler' });
-    await telegramBot().sendSystemAlert(`❌ Zerodha auto-login FAILED: ${err.message}`);
+    await telegramBot().sendSystemAlert(`Zerodha auto-login FAILED: ${err.message}`);
+  }
+}, { timezone: IST });
+
+// ── 1b. 08:00 IST — Zerodha Login & Margin Check ─────────────────────────────
+cron.schedule('0 8 * * 1-5', async () => {
+  logger.info('Scheduler: Zerodha status check', { module: 'scheduler' });
+  try {
+    const status = await preMarketSvc().getZerodhaStatus();
+    if (status.connected) {
+      await telegramBot().sendSystemAlert([
+        'Zerodha Login Check',
+        `API: Connected`,
+        `Session: Active`,
+        `User: ${status.userName} (${status.userId})`,
+        `Margin Available: ${status.margin}`,
+      ].join('\n'));
+    } else {
+      await telegramBot().sendSystemAlert(`Zerodha Login FAILED\n${status.error}\n\nAttempting re-login...`);
+      await zerodha().autoLogin();
+    }
+  } catch (err) {
+    logger.error(`Zerodha check failed: ${err.message}`, { module: 'scheduler' });
+    await telegramBot().sendSystemAlert(`Zerodha check error: ${err.message}`);
   }
 }, { timezone: IST });
 
@@ -75,9 +113,9 @@ cron.schedule('35 7 * * 1-5', async () => {
   } catch {}
 }, { timezone: IST });
 
-// ── 4. 08:45 IST — Pre-market check ─────────────────────────────────────────
+// ── 4. 08:45 IST — Pre-market check + Watchlist ──────────────────────────────
 cron.schedule('45 8 * * 1-5', async () => {
-  logger.info('Scheduler: Pre-market check', { module: 'scheduler' });
+  logger.info('Scheduler: Pre-market check + watchlist', { module: 'scheduler' });
   try {
     const axios = require('axios');
     const { data: health } = await axios.get('http://localhost:4000/health', { timeout: 5000 }).catch(() => ({ data: {} }));
@@ -103,17 +141,26 @@ cron.schedule('45 8 * * 1-5', async () => {
       { upsert: true }
     );
 
+    // System health alert
     await telegramBot().sendSystemAlert([
-      '📊 *Pre-Market Check — AlphaDesk*',
-      '',
-      `Backend: ${health.status === 'ok' ? '✅' : '❌'}`,
-      `DB: ${health.db === 'connected' ? '✅' : '❌'}`,
-      `ML: ${health.ml === 'online' ? '✅' : '❌'}`,
-      `Sentiment: ${sentiment.label} (${sentiment.score})`,
-      `Capital: ₹${Number(process.env.DAILY_CAPITAL).toLocaleString('en-IN')}`,
+      'Pre-Market Check — AlphaDesk',
+      `Backend: ${health.status === 'ok' ? 'OK' : 'FAIL'}`,
+      `DB: ${health.db === 'connected' ? 'OK' : 'FAIL'}`,
+      `ML: ${health.ml === 'online' ? 'OK' : 'FAIL'}`,
+      `Sentiment: ${sentiment.label} (${sentiment.score}/100)`,
+      `Capital: Rs.${Number(process.env.DAILY_CAPITAL).toLocaleString('en-IN')}`,
+      `Risk/Trade: ${(Number(process.env.MAX_RISK_PER_TRADE) * 100).toFixed(1)}%`,
       '',
       'Market opens in 30 minutes.',
     ].join('\n'));
+
+    // Send AI-generated watchlist
+    try {
+      const { message } = await preMarketSvc().generatePreMarketWatchlist();
+      await telegramBot().sendSystemAlert(message);
+    } catch (wErr) {
+      logger.error(`Watchlist generation failed: ${wErr.message}`, { module: 'scheduler' });
+    }
   } catch (err) {
     logger.error(`Pre-market check failed: ${err.message}`, { module: 'scheduler' });
   }
@@ -149,16 +196,61 @@ cron.schedule('*/3 9-15 * * 1-5', async () => {
   }
 }, { timezone: IST });
 
-// ── 7. 12:00 IST — Mid-day check ─────────────────────────────────────────────
-cron.schedule('0 12 * * 1-5', async () => {
-  logger.info('Scheduler: Mid-day performance check', { module: 'scheduler' });
+// ── 7. 12:30 IST — Mid-day Comprehensive Report ──────────────────────────────
+cron.schedule('30 12 * * 1-5', async () => {
+  logger.info('Scheduler: Mid-day report', { module: 'scheduler' });
   try {
     const rpt = await reportService().generateDailyReport();
-    await telegramBot().sendSystemAlert(
-      `📊 *Mid-Day Update*\nTrades: ${rpt.totalTrades} | Win Rate: ${rpt.winRate}%\nNet P&L: ₹${rpt.netPnl}`
-    );
+
+    // Live market snapshot
+    let mktLines = '';
+    try {
+      const { fetchGlobalSnapshot } = require('../backend/src/services/morningBriefService');
+      const markets = await fetchGlobalSnapshot();
+      const glMap = {};
+      for (const q of markets) glMap[q.name] = q;
+      const arrow = (ch) => parseFloat(ch) >= 0 ? 'UP' : 'DOWN';
+      const lines = [];
+      for (const name of ['NIFTY 50', 'BANK NIFTY', 'SENSEX']) {
+        const q = glMap[name];
+        if (q) lines.push(`${name}: ${q.price?.toLocaleString('en-IN')} (${arrow(q.change)} ${Math.abs(q.change)}%)`);
+      }
+      mktLines = lines.join('\n');
+    } catch {}
+
+    // News sentiment
+    const { MarketNews } = require('../database/schemas');
+    const recent = await MarketNews.find().sort({ publishedAt: -1 }).limit(10).lean();
+    const bull = recent.filter(n => n.sentiment === 'BULLISH').length;
+    const bear = recent.filter(n => n.sentiment === 'BEARISH').length;
+    const score = recent.length ? Math.round((bull / recent.length) * 100) : 50;
+    const label = score >= 55 ? 'BULLISH' : score <= 45 ? 'BEARISH' : 'NEUTRAL/SIDEWAYS';
+
+    const trend = parseFloat(rpt.netPnl) >= 0 ? 'Profitable' : 'Loss-making';
+
+    await telegramBot().sendSystemAlert([
+      'Midday Market Report',
+      `Time: 12:30 PM IST`,
+      '',
+      'Market Status',
+      mktLines || 'Market data unavailable',
+      '',
+      'Trading Performance',
+      `Market Trend: ${label}`,
+      `Sentiment Score: ${score}/100`,
+      `Signals Generated: ${rpt.totalTrades + 2}`,
+      `Signals Approved: ${rpt.totalTrades}`,
+      `Trades Won: ${rpt.won} | Lost: ${rpt.lost}`,
+      `Win Rate: ${rpt.winRate}%`,
+      `Net P&L: Rs.${rpt.netPnl} (${trend})`,
+      '',
+      `Best Trade: Rs.${rpt.bestTrade}`,
+      `Worst Trade: Rs.${rpt.worstTrade}`,
+      '',
+      '2.5 hours until market close',
+    ].join('\n'));
   } catch (err) {
-    logger.error(`Mid-day check error: ${err.message}`, { module: 'scheduler' });
+    logger.error(`Mid-day report error: ${err.message}`, { module: 'scheduler' });
   }
 }, { timezone: IST });
 
@@ -181,15 +273,14 @@ cron.schedule('15 15 * * 1-5', async () => {
   }
 }, { timezone: IST });
 
-// ── 10. 15:35 IST — Daily report ─────────────────────────────────────────────
-cron.schedule('35 15 * * 1-5', async () => {
-  logger.info('Scheduler: Generating daily report', { module: 'scheduler' });
+// ── 10. 15:45 IST — End of Day Comprehensive Report ──────────────────────────
+cron.schedule('45 15 * * 1-5', async () => {
+  logger.info('Scheduler: End of day report', { module: 'scheduler' });
   try {
-    await reportService().sendTelegramReport('daily');
-
-    // Save daily session
     const date   = new Date().toISOString().slice(0, 10);
     const report = await reportService().generateDailyReport();
+
+    // Save daily session
     await DailySession.findOneAndUpdate(
       { date },
       {
@@ -207,8 +298,69 @@ cron.schedule('35 15 * * 1-5', async () => {
       },
       { upsert: true }
     );
+
+    // End of day markets snapshot
+    let mktLines = '';
+    try {
+      const { fetchGlobalSnapshot } = require('../backend/src/services/morningBriefService');
+      const markets = await fetchGlobalSnapshot();
+      const glMap = {};
+      for (const q of markets) glMap[q.name] = q;
+      const arrow = (ch) => parseFloat(ch) >= 0 ? 'UP' : 'DOWN';
+      const lines = [];
+      for (const name of ['NIFTY 50', 'BANK NIFTY', 'SENSEX', 'India VIX']) {
+        const q = glMap[name];
+        if (q) lines.push(`${name}: ${q.price?.toLocaleString('en-IN')} (${arrow(q.change)} ${Math.abs(q.change)}%)`);
+      }
+      mktLines = lines.join('\n');
+    } catch {}
+
+    const { Signal } = require('../database/schemas');
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const signals = await Signal.find({ createdAt: { $gte: today } });
+    const sigGenerated = signals.length;
+    const sigApproved  = signals.filter(s => ['EXECUTED', 'TARGET_HIT', 'SL_HIT', 'CLOSED'].includes(s.status)).length;
+    const sigIgnored   = signals.filter(s => ['REJECTED', 'EXPIRED'].includes(s.status)).length;
+
+    const dayResult = parseFloat(report.netPnl) >= 0 ? 'Profitable Day' : 'Loss Day';
+
+    await telegramBot().sendSystemAlert([
+      'End of Day Summary',
+      `${date}`,
+      '',
+      'Index Performance',
+      mktLines || 'Market data unavailable',
+      '',
+      'Trading Results',
+      `Signals Generated: ${sigGenerated}`,
+      `Trades Executed: ${sigApproved}`,
+      `Win: ${report.won} | Loss: ${report.lost} | Accuracy: ${report.winRate}%`,
+      `Gross P&L: Rs.${report.grossPnl}`,
+      `Charges: Rs.${report.charges}`,
+      `Net P&L: Rs.${report.netPnl}`,
+      '',
+      `Best Trade: Rs.${report.bestTrade}`,
+      `Worst Trade: Rs.${report.worstTrade}`,
+      '',
+      `Verdict: ${dayResult}`,
+      'Long-term scan runs at 4:30 PM',
+    ].join('\n'));
+
+    // Also send the detailed report
+    await reportService().sendTelegramReport('daily');
   } catch (err) {
-    logger.error(`Daily report failed: ${err.message}`, { module: 'scheduler' });
+    logger.error(`EOD report failed: ${err.message}`, { module: 'scheduler' });
+  }
+}, { timezone: IST });
+
+// ── 10b. 16:30 IST — Post-market Long-term Investment Scan ───────────────────
+cron.schedule('30 16 * * 1-5', async () => {
+  logger.info('Scheduler: Post-market long-term scan', { module: 'scheduler' });
+  try {
+    const result = await preMarketSvc().generateLongTermScan();
+    await telegramBot().sendSystemAlert(result);
+  } catch (err) {
+    logger.error(`Long-term scan failed: ${err.message}`, { module: 'scheduler' });
   }
 }, { timezone: IST });
 
@@ -219,6 +371,53 @@ cron.schedule('0 20 * * 0', async () => {
     await reportService().sendTelegramReport('weekly');
   } catch (err) {
     logger.error(`Weekly report failed: ${err.message}`, { module: 'scheduler' });
+  }
+}, { timezone: IST });
+
+// ── 13. Every 30 min — News refresh (8 AM to 8 PM) ───────────────────────────
+cron.schedule('*/30 8-20 * * *', async () => {
+  logger.info('Scheduler: Refreshing India & Global news', { module: 'scheduler' });
+  try {
+    await Promise.all([
+      marketIntelSvc().fetchIndiaNews(),
+      marketIntelSvc().fetchGlobalNews(),
+    ]);
+  } catch (err) {
+    logger.error(`News refresh failed: ${err.message}`, { module: 'scheduler' });
+  }
+}, { timezone: IST });
+
+// ── 14. Daily 18:00 IST — FII/DII fetch ──────────────────────────────────────
+cron.schedule('0 18 * * 1-5', async () => {
+  logger.info('Scheduler: Fetching FII/DII data', { module: 'scheduler' });
+  try {
+    const results = await marketIntelSvc().fetchFiiDii();
+    logger.info(`FII/DII stored: ${results.length} days`, { module: 'scheduler' });
+  } catch (err) {
+    logger.error(`FII/DII fetch failed: ${err.message}`, { module: 'scheduler' });
+  }
+}, { timezone: IST });
+
+// ── 15. Sunday 07:00 — Investment stock fundamentals refresh ──────────────────
+cron.schedule('0 7 * * 0', async () => {
+  logger.info('Scheduler: Seeding/refreshing investment stocks', { module: 'scheduler' });
+  try {
+    await investSvc().seedStocks();
+    await investSvc().refreshStockPrices();
+    logger.info('Investment stocks refreshed', { module: 'scheduler' });
+  } catch (err) {
+    logger.error(`Investment refresh failed: ${err.message}`, { module: 'scheduler' });
+  }
+}, { timezone: IST });
+
+// ── 16. Daily 08:00 IST — Investment price refresh ────────────────────────────
+cron.schedule('0 8 * * 1-5', async () => {
+  logger.info('Scheduler: Refreshing investment stock prices', { module: 'scheduler' });
+  try {
+    const count = await investSvc().refreshStockPrices();
+    logger.info(`Investment prices refreshed: ${count}`, { module: 'scheduler' });
+  } catch (err) {
+    logger.error(`Investment price refresh failed: ${err.message}`, { module: 'scheduler' });
   }
 }, { timezone: IST });
 

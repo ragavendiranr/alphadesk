@@ -1,5 +1,5 @@
-export const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:4000';
-export const WS_URL      = import.meta.env.VITE_WS_URL      || 'http://localhost:4000';
+export const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || '';
+export const WS_URL      = import.meta.env.VITE_WS_URL      || '';
 
 export const WATCHED_SYMBOLS = [
   'NIFTY 50', 'NIFTY BANK',

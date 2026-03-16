@@ -17,6 +17,10 @@ import BudgetModal    from './components/BudgetModal';
 import AIJournal      from './components/AIJournal';
 import GreeksPanel    from './components/GreeksPanel';
 import OrderFlowPanel from './components/OrderFlowPanel';
+import MarketIntelligencePanel from './components/MarketIntelligencePanel';
+import InvestPanel        from './components/InvestPanel';
+import ActivityLog        from './components/ActivityLog';
+import SignalEnginePanel  from './components/SignalEnginePanel';
 
 import useWebSocket   from './hooks/useWebSocket';
 import useTrades      from './hooks/useTrades';
@@ -30,7 +34,7 @@ const setAuthHeader = (token) => {
 const TABS = [
   'Dashboard', 'Signals', 'Trades', 'ML Engine',
   'Regime', 'Sentiment', 'Backtest', 'Options',
-  'Journal', 'Risk', 'Settings',
+  'Journal', 'Risk', 'News & Market', 'Invest', 'Settings',
 ];
 
 export default function App() {
@@ -48,6 +52,7 @@ export default function App() {
   const [equityCurve,  setEquityCurve]  = useState([]);
   const [showBudget,   setShowBudget]   = useState(false);
   const [allTrades,    setAllTrades]    = useState([]);
+  const [systemStatus, setSystemStatus] = useState(null);
 
   const { connected, ticks, tradeUpdates, newSignals } = useWebSocket();
   const { openTrades, summary, refetch: refetchTrades } = useTrades();
@@ -58,15 +63,15 @@ export default function App() {
     try {
       const { data } = await axios.post(`${BACKEND_URL}/api/auth/login`, {
         username: loginForm.user, password: loginForm.pass,
-      });
+      }, { timeout: 15000 });
       localStorage.setItem('alphadesk_token', data.token);
       setAuthHeader(data.token);
       setToken(data.token);
     } catch (e) {
       if (e.response?.status === 401) {
         setLoginErr('Invalid credentials — use DWU300 / your password');
-      } else if (e.code === 'ERR_NETWORK' || !e.response) {
-        setLoginErr('Cannot reach server — check backend URL');
+      } else if (e.code === 'ERR_NETWORK' || e.code === 'ECONNABORTED' || !e.response) {
+        setLoginErr(`Server unreachable — try again or check: ${BACKEND_URL}/health`);
       } else {
         setLoginErr(e.response?.data?.error || 'Login failed');
       }
@@ -77,10 +82,19 @@ export default function App() {
     if (token) {
       setAuthHeader(token);
       loadDashboardData();
-      const id = setInterval(loadDashboardData, 30000);
-      return () => clearInterval(id);
+      loadSystemStatus();
+      const id1 = setInterval(loadDashboardData, 30000);
+      const id2 = setInterval(loadSystemStatus, 10000);
+      return () => { clearInterval(id1); clearInterval(id2); };
     }
   }, [token]);
+
+  async function loadSystemStatus() {
+    try {
+      const { data } = await api.get('/api/system/status');
+      setSystemStatus(data);
+    } catch {}
+  }
 
   // Append new signals from WS
   useEffect(() => {
@@ -156,7 +170,7 @@ export default function App() {
 
   return (
     <div style={{ minHeight: '100vh', background: '#060d1a' }}>
-      <Header connected={connected} systemHealth={health} />
+      <Header connected={connected} systemHealth={health} systemStatus={systemStatus} />
       <TickerBar ticks={ticks} />
 
       {/* Tab navigation */}
@@ -184,51 +198,60 @@ export default function App() {
 
         {/* ── Dashboard ── */}
         {tab === 'Dashboard' && (
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16 }}>
-            {/* Left: Signals */}
-            <div>
-              <h3 style={{ color: '#e2e8f0', marginBottom: 10, fontSize: 14 }}>
-                Pending Signals ({signals.filter(s => s.status === 'PENDING').length})
-              </h3>
-              {signals.filter(s => s.status === 'PENDING').slice(0, 5).map(s => (
-                <SignalCard key={s._id} signal={s} onAction={handleSignalAction} />
-              ))}
-              {signals.filter(s => s.status === 'PENDING').length === 0 &&
-                <div style={{ color: '#64748b', fontSize: 12, textAlign: 'center', padding: 20 }}>No pending signals</div>
-              }
-            </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            {/* Top row: 3 columns */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16 }}>
+              {/* Left: Signals */}
+              <div>
+                <h3 style={{ color: '#e2e8f0', marginBottom: 10, fontSize: 14 }}>
+                  Pending Signals ({signals.filter(s => s.status === 'PENDING').length})
+                </h3>
+                {signals.filter(s => s.status === 'PENDING').slice(0, 5).map(s => (
+                  <SignalCard key={s._id} signal={s} onAction={handleSignalAction} />
+                ))}
+                {signals.filter(s => s.status === 'PENDING').length === 0 &&
+                  <div style={{ color: '#64748b', fontSize: 12, textAlign: 'center', padding: 20 }}>No pending signals</div>
+                }
+              </div>
 
-            {/* Middle: P&L + Trades */}
-            <div>
-              {summary && (
-                <div style={{ background: '#0d1526', borderRadius: 10, padding: 16, marginBottom: 14, border: '1px solid #1e2d4a' }}>
-                  <h3 style={{ color: '#e2e8f0', fontSize: 14, marginBottom: 10 }}>Today's P&L</h3>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10 }}>
-                    {[
-                      { label: 'Net P&L', val: `₹${parseFloat(summary.netPnl).toFixed(0)}`, big: true, color: parseFloat(summary.netPnl) >= 0 ? '#22c55e' : '#ef4444' },
-                      { label: 'Win Rate', val: `${summary.winRate}%` },
-                      { label: 'Trades', val: `${summary.won}W / ${summary.lost}L` },
-                    ].map(({ label, val, big, color }) => (
-                      <div key={label} style={{ textAlign: 'center' }}>
-                        <div style={{ fontSize: 10, color: '#64748b' }}>{label}</div>
-                        <div style={{ fontSize: big ? 20 : 14, fontWeight: 700, color: color || '#e2e8f0' }}>{val}</div>
-                      </div>
-                    ))}
+              {/* Middle: P&L + Trades */}
+              <div>
+                {summary && (
+                  <div style={{ background: '#0d1526', borderRadius: 10, padding: 16, marginBottom: 14, border: '1px solid #1e2d4a' }}>
+                    <h3 style={{ color: '#e2e8f0', fontSize: 14, marginBottom: 10 }}>Today's P&L</h3>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10 }}>
+                      {[
+                        { label: 'Net P&L', val: `₹${parseFloat(summary.netPnl).toFixed(0)}`, big: true, color: parseFloat(summary.netPnl) >= 0 ? '#22c55e' : '#ef4444' },
+                        { label: 'Win Rate', val: `${summary.winRate}%` },
+                        { label: 'Trades', val: `${summary.won}W / ${summary.lost}L` },
+                      ].map(({ label, val, big, color }) => (
+                        <div key={label} style={{ textAlign: 'center' }}>
+                          <div style={{ fontSize: 10, color: '#64748b' }}>{label}</div>
+                          <div style={{ fontSize: big ? 20 : 14, fontWeight: 700, color: color || '#e2e8f0' }}>{val}</div>
+                        </div>
+                      ))}
+                    </div>
                   </div>
+                )}
+                <TradeLog trades={openTrades} title={`Open Positions (${openTrades.length})`} />
+                <div style={{ marginTop: 14 }}>
+                  <PerfChart data={equityCurve} />
                 </div>
-              )}
-              <TradeLog trades={openTrades} title={`Open Positions (${openTrades.length})`} />
-              <div style={{ marginTop: 14 }}>
-                <PerfChart data={equityCurve} />
+              </div>
+
+              {/* Right: Risk + Regime + Sentiment */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                <RiskMeter riskStatus={riskStatus} />
+                <RegimePanel regime={regime} />
+                <SentimentPanel sentiment={sentiment} />
+                <SystemMonitor health={health} />
               </div>
             </div>
 
-            {/* Right: Risk + Regime + Sentiment */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-              <RiskMeter riskStatus={riskStatus} />
-              <RegimePanel regime={regime} />
-              <SentimentPanel sentiment={sentiment} />
-              <SystemMonitor health={health} />
+            {/* Bottom row: Signal Engine Panel + Activity Log */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: 16 }}>
+              <SignalEnginePanel systemStatus={systemStatus} />
+              <ActivityLog token={token} />
             </div>
           </div>
         )}
@@ -290,6 +313,10 @@ export default function App() {
             </div>
           </div>
         )}
+
+        {tab === 'News & Market' && <MarketIntelligencePanel token={token} />}
+
+        {tab === 'Invest' && <InvestPanel token={token} />}
 
         {tab === 'Settings' && (
           <div style={{ maxWidth: 500 }}>
