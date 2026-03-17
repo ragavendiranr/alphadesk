@@ -13,6 +13,7 @@ const { limiter }      = require('./src/middleware/rateLimiter');
 const errorHandler     = require('./src/middleware/errorHandler');
 const { getSystemHealth } = require('./src/services/healthService');
 const monitorService   = require('./src/services/monitorService');
+const healthMonitor    = require('./src/services/systemHealthService');
 
 // ── Route imports ─────────────────────────────────────────────────────────────
 const authRoutes      = require('./src/routes/auth');
@@ -120,6 +121,8 @@ async function start() {
     logger.info(`🚀 AlphaDesk backend running on port ${PORT}`, { module: 'server' });
     // Start trade monitor
     monitorService.start(io);
+    // Start system health monitor (30s interval)
+    healthMonitor.start(io);
     // Start scheduler
     require('../scheduler').start();
     logger.info('✅ All services started', { module: 'server' });
@@ -135,6 +138,7 @@ start().catch((err) => {
 process.on('SIGTERM', async () => {
   logger.info('SIGTERM received — shutting down gracefully', { module: 'server' });
   monitorService.stop();
+  healthMonitor.stop();
   server.close(() => process.exit(0));
 });
 

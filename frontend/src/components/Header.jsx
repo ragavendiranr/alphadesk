@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { Activity, Wifi, WifiOff } from 'lucide-react';
+import { Activity, Wifi, WifiOff, Shield } from 'lucide-react';
 
-export default function Header({ connected, systemHealth, systemStatus }) {
+export default function Header({ connected, systemHealth, systemStatus, fullHealth, alertCount }) {
   const [clock, setClock] = useState('');
 
   useEffect(() => {
@@ -16,14 +16,21 @@ export default function Header({ connected, systemHealth, systemStatus }) {
   }, []);
 
   const dbOk = systemHealth?.db === 'connected';
+  const mlOk = systemHealth?.ml === 'online';
   const beOk = systemHealth?.status === 'ok';
 
-  const mktStatus  = systemStatus?.marketStatus  || 'CLOSED';
-  const botStatus  = systemStatus?.botStatus     || 'IDLE';
-  const sigStatus  = systemStatus?.signalEngineStatus || 'PAUSED';
+  const mktStatus = systemStatus?.marketStatus        || 'CLOSED';
+  const botStatus = systemStatus?.botStatus           || 'IDLE';
+  const sigStatus = systemStatus?.signalEngineStatus  || 'PAUSED';
 
   const mktColor = { OPEN: '#22c55e', 'PRE-OPEN': '#f59e0b', 'POST-CLOSE': '#94a3b8', CLOSED: '#ef4444' };
   const sigColor = sigStatus === 'ACTIVE' ? '#22c55e' : '#64748b';
+
+  const lastCheckTime = fullHealth?.lastCheck
+    ? new Date(fullHealth.lastCheck).toLocaleTimeString('en-IN', {
+        timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit',
+      })
+    : null;
 
   return (
     <header style={{
@@ -67,6 +74,30 @@ export default function Header({ connected, systemHealth, systemStatus }) {
           pulse={sigStatus === 'ACTIVE'}
         />
 
+        {/* System Monitor Active */}
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 5,
+          background: '#0a1628', borderRadius: 5, padding: '3px 8px',
+          border: '1px solid #1e3a5f',
+        }}>
+          <Shield size={10} color="#3b82f6" />
+          <span style={{ fontSize: 9, color: '#3b82f6', fontWeight: 700 }}>MONITOR</span>
+          {lastCheckTime && (
+            <span style={{ fontSize: 9, color: '#64748b' }}>{lastCheckTime}</span>
+          )}
+        </div>
+
+        {/* Alert count badge */}
+        {alertCount > 0 && (
+          <div style={{
+            background: '#7f1d1d', color: '#fca5a5', border: '1px solid #ef4444',
+            borderRadius: 10, padding: '1px 7px', fontSize: 10, fontWeight: 700,
+            animation: 'alertBlink 1s ease-in-out infinite',
+          }}>
+            {alertCount} ALERT{alertCount !== 1 ? 'S' : ''}
+          </div>
+        )}
+
         {/* Signals today */}
         {systemStatus?.signalStats && (
           <div style={{ fontSize: 11, color: '#94a3b8', background: '#1a2035', borderRadius: 4, padding: '2px 8px', border: '1px solid #2d3a5a' }}>
@@ -79,6 +110,7 @@ export default function Header({ connected, systemHealth, systemStatus }) {
       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
         <StatusDot label="API" ok={beOk} />
         <StatusDot label="DB"  ok={dbOk} />
+        <StatusDot label="ML"  ok={mlOk} />
         <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
           {connected
             ? <><Wifi size={13} color="#22c55e" /><span style={{ fontSize: 11, color: '#22c55e' }}>LIVE</span></>
@@ -87,6 +119,10 @@ export default function Header({ connected, systemHealth, systemStatus }) {
         </div>
         <span style={{ fontSize: 11, color: '#64748b', minWidth: 64 }}>{clock} IST</span>
       </div>
+
+      <style>{`
+        @keyframes alertBlink { 0%,100%{opacity:1} 50%{opacity:0.5} }
+      `}</style>
     </header>
   );
 }
@@ -104,13 +140,13 @@ function StatusChip({ label, value, color, pulse }) {
           <div style={{
             position: 'absolute', top: 0, left: 0, width: 7, height: 7,
             borderRadius: '50%', background: color, opacity: 0.5,
-            animation: 'pulse 1.5s ease-in-out infinite',
+            animation: 'chipPulse 1.5s ease-in-out infinite',
           }} />
         )}
       </div>
       <span style={{ fontSize: 9, color: '#64748b', textTransform: 'uppercase' }}>{label}</span>
       <span style={{ fontSize: 11, color, fontWeight: 700 }}>{value}</span>
-      <style>{`@keyframes pulse { 0%,100%{transform:scale(1);opacity:.5} 50%{transform:scale(2.2);opacity:0} }`}</style>
+      <style>{`@keyframes chipPulse { 0%,100%{transform:scale(1);opacity:.5} 50%{transform:scale(2.2);opacity:0} }`}</style>
     </div>
   );
 }

@@ -1,29 +1,30 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 
-import Header         from './components/Header';
-import TickerBar      from './components/TickerBar';
-import SignalCard     from './components/SignalCard';
-import TradeLog       from './components/TradeLog';
-import RiskMeter      from './components/RiskMeter';
-import MLPanel        from './components/MLPanel';
-import StrategyPanel  from './components/StrategyPanel';
-import PerfChart      from './components/PerfChart';
-import BacktestPanel  from './components/BacktestPanel';
-import RegimePanel    from './components/RegimePanel';
-import SentimentPanel from './components/SentimentPanel';
-import SystemMonitor  from './components/SystemMonitor';
-import BudgetModal    from './components/BudgetModal';
-import AIJournal      from './components/AIJournal';
-import GreeksPanel    from './components/GreeksPanel';
-import OrderFlowPanel from './components/OrderFlowPanel';
+import Header              from './components/Header';
+import TickerBar           from './components/TickerBar';
+import SignalCard          from './components/SignalCard';
+import TradeLog            from './components/TradeLog';
+import RiskMeter           from './components/RiskMeter';
+import MLPanel             from './components/MLPanel';
+import StrategyPanel       from './components/StrategyPanel';
+import PerfChart           from './components/PerfChart';
+import BacktestPanel       from './components/BacktestPanel';
+import RegimePanel         from './components/RegimePanel';
+import SentimentPanel      from './components/SentimentPanel';
+import SystemMonitor       from './components/SystemMonitor';
+import BudgetModal         from './components/BudgetModal';
+import AIJournal           from './components/AIJournal';
+import GreeksPanel         from './components/GreeksPanel';
+import OrderFlowPanel      from './components/OrderFlowPanel';
 import MarketIntelligencePanel from './components/MarketIntelligencePanel';
-import InvestPanel        from './components/InvestPanel';
-import ActivityLog        from './components/ActivityLog';
-import SignalEnginePanel  from './components/SignalEnginePanel';
+import InvestPanel         from './components/InvestPanel';
+import ActivityLog         from './components/ActivityLog';
+import SignalEnginePanel   from './components/SignalEnginePanel';
+import SystemHealthPanel   from './components/SystemHealthPanel';
 
-import useWebSocket   from './hooks/useWebSocket';
-import useTrades      from './hooks/useTrades';
+import useWebSocket from './hooks/useWebSocket';
+import useTrades    from './hooks/useTrades';
 import { BACKEND_URL } from './utils/constants';
 
 const api = axios.create({ baseURL: BACKEND_URL });
@@ -34,7 +35,7 @@ const setAuthHeader = (token) => {
 const TABS = [
   'Dashboard', 'Signals', 'Trades', 'ML Engine',
   'Regime', 'Sentiment', 'Backtest', 'Options',
-  'Journal', 'Risk', 'News & Market', 'Invest', 'Settings',
+  'Journal', 'Risk', 'News & Market', 'Invest', 'System', 'Settings',
 ];
 
 export default function App() {
@@ -53,9 +54,24 @@ export default function App() {
   const [showBudget,   setShowBudget]   = useState(false);
   const [allTrades,    setAllTrades]    = useState([]);
   const [systemStatus, setSystemStatus] = useState(null);
+  const [fullHealth,   setFullHealth]   = useState(null);   // detailed component health
+  const [wsAlerts,     setWsAlerts]     = useState([]);      // alerts from WS
 
-  const { connected, ticks, tradeUpdates, newSignals } = useWebSocket();
+  const { connected, ticks, tradeUpdates, newSignals, subscribe,
+          systemHealth: wsHealth, systemAlerts } = useWebSocket();
   const { openTrades, summary, refetch: refetchTrades } = useTrades();
+
+  // Merge WebSocket health updates with fetched health
+  useEffect(() => {
+    if (wsHealth) setFullHealth(wsHealth);
+  }, [wsHealth]);
+
+  // Merge WebSocket alerts
+  useEffect(() => {
+    if (systemAlerts?.length > 0) setWsAlerts(systemAlerts);
+  }, [systemAlerts]);
+
+  const allAlerts = wsAlerts.length > 0 ? wsAlerts : (fullHealth?.alerts || []);
 
   // Auth
   const login = async () => {
@@ -83,9 +99,11 @@ export default function App() {
       setAuthHeader(token);
       loadDashboardData();
       loadSystemStatus();
-      const id1 = setInterval(loadDashboardData, 30000);
-      const id2 = setInterval(loadSystemStatus, 10000);
-      return () => { clearInterval(id1); clearInterval(id2); };
+      loadFullHealth();
+      const id1 = setInterval(loadDashboardData,  30_000);
+      const id2 = setInterval(loadSystemStatus,   10_000);
+      const id3 = setInterval(loadFullHealth,     30_000);
+      return () => { clearInterval(id1); clearInterval(id2); clearInterval(id3); };
     }
   }, [token]);
 
@@ -93,6 +111,14 @@ export default function App() {
     try {
       const { data } = await api.get('/api/system/status');
       setSystemStatus(data);
+    } catch {}
+  }
+
+  async function loadFullHealth() {
+    try {
+      const { data } = await api.get('/api/system/health');
+      setFullHealth(data);
+      if (data.alerts?.length > 0) setWsAlerts(data.alerts);
     } catch {}
   }
 
@@ -128,7 +154,6 @@ export default function App() {
       if (mlRes.status        === 'fulfilled') setMlStats(mlRes.value.data);
       if (tradesRes.status    === 'fulfilled') {
         setAllTrades(tradesRes.value.data.trades || []);
-        // Build simple equity curve
         const closed = (tradesRes.value.data.trades || [])
           .filter(t => t.status !== 'OPEN')
           .sort((a, b) => new Date(a.entryTime) - new Date(b.entryTime));
@@ -141,6 +166,13 @@ export default function App() {
 
   const handleSignalAction = (action, id) => {
     setSignals(prev => prev.map(s => s._id === id ? { ...s, status: action === 'approved' ? 'EXECUTED' : 'REJECTED' } : s));
+  };
+
+  const handleRepair = (updatedHealth) => {
+    if (updatedHealth) {
+      setFullHealth(updatedHealth);
+      setWsAlerts(updatedHealth.alerts || []);
+    }
   };
 
   // Login screen
@@ -170,8 +202,33 @@ export default function App() {
 
   return (
     <div style={{ minHeight: '100vh', background: '#060d1a' }}>
-      <Header connected={connected} systemHealth={health} systemStatus={systemStatus} />
+      <Header
+        connected={connected}
+        systemHealth={health}
+        systemStatus={systemStatus}
+        fullHealth={fullHealth}
+        alertCount={allAlerts.length}
+      />
       <TickerBar ticks={ticks} />
+
+      {/* Persistent alert bar — shows on any tab */}
+      {allAlerts.length > 0 && tab !== 'System' && (
+        <div
+          onClick={() => setTab('System')}
+          style={{
+            background: '#1a0000', borderBottom: '1px solid #ef4444',
+            padding: '6px 16px', cursor: 'pointer',
+            display: 'flex', alignItems: 'center', gap: 8,
+          }}
+        >
+          <span style={{ fontSize: 14 }}>🚨</span>
+          <span style={{ color: '#fca5a5', fontSize: 12, fontWeight: 600 }}>
+            {allAlerts.length} system alert{allAlerts.length !== 1 ? 's' : ''} detected —
+          </span>
+          <span style={{ color: '#ef4444', fontSize: 12 }}>{allAlerts[0]?.title}</span>
+          <span style={{ color: '#64748b', fontSize: 11, marginLeft: 'auto' }}>Click to view System Health →</span>
+        </div>
+      )}
 
       {/* Tab navigation */}
       <div style={{ background: '#0d1526', borderBottom: '1px solid #1e2d4a', padding: '0 16px', display: 'flex', gap: 4, overflowX: 'auto' }}>
@@ -181,8 +238,17 @@ export default function App() {
             padding: '10px 14px', fontSize: 13, fontWeight: tab === t ? 700 : 400,
             color: tab === t ? '#3b82f6' : '#64748b',
             borderBottom: tab === t ? '2px solid #3b82f6' : '2px solid transparent',
-            whiteSpace: 'nowrap',
-          }}>{t}</button>
+            whiteSpace: 'nowrap', position: 'relative',
+          }}>
+            {t}
+            {t === 'System' && allAlerts.length > 0 && (
+              <span style={{
+                position: 'absolute', top: 4, right: 2,
+                background: '#ef4444', borderRadius: '50%',
+                width: 8, height: 8, display: 'block',
+              }} />
+            )}
+          </button>
         ))}
         <button onClick={() => setShowBudget(true)} style={{
           marginLeft: 'auto', background: '#1e3a5f', color: '#3b82f6', border: '1px solid #3b82f6',
@@ -318,6 +384,85 @@ export default function App() {
 
         {tab === 'Invest' && <InvestPanel token={token} />}
 
+        {/* ── System Health Monitor tab ── */}
+        {tab === 'System' && (
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
+              <h2 style={{ color: '#e2e8f0', margin: 0, fontSize: 18 }}>System Health Monitor</h2>
+              <button
+                onClick={loadFullHealth}
+                style={{ background: '#1a2035', color: '#94a3b8', border: '1px solid #2d3a5a', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 11 }}
+              >
+                ↻ Refresh
+              </button>
+            </div>
+
+            {/* Data feed stale warning */}
+            {fullHealth?.components?.marketData?.status === 'stale' && (
+              <div style={{
+                background: '#451a03', border: '1px solid #f59e0b', borderRadius: 8,
+                padding: '12px 16px', marginBottom: 16,
+                display: 'flex', alignItems: 'center', gap: 10,
+              }}>
+                <span style={{ fontSize: 20 }}>⚠️</span>
+                <div>
+                  <div style={{ color: '#fbbf24', fontWeight: 700, fontSize: 13 }}>
+                    Signal Generation Paused — Market Data Stale
+                  </div>
+                  <div style={{ color: '#92400e', fontSize: 11, marginTop: 2 }}>
+                    {fullHealth.components.marketData.error}. All signals blocked until feed recovers.
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <SystemHealthPanel
+              token={token}
+              fullHealth={fullHealth}
+              onRepair={handleRepair}
+            />
+
+            {/* Component detail table */}
+            {fullHealth?.components && (
+              <div style={{ marginTop: 16, background: '#0d1526', border: '1px solid #1e2d4a', borderRadius: 10, padding: 16 }}>
+                <h3 style={{ color: '#e2e8f0', fontSize: 13, marginBottom: 12 }}>Component Detail</h3>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                  <thead>
+                    <tr style={{ color: '#64748b', textAlign: 'left' }}>
+                      <th style={{ padding: '4px 8px', fontWeight: 600 }}>Component</th>
+                      <th style={{ padding: '4px 8px', fontWeight: 600 }}>Status</th>
+                      <th style={{ padding: '4px 8px', fontWeight: 600 }}>Detail</th>
+                      <th style={{ padding: '4px 8px', fontWeight: 600 }}>Last Check (IST)</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {Object.entries(fullHealth.components).map(([key, comp]) => {
+                      const isOk = ['online','connected','authenticated','running','ready','active'].includes(comp.status);
+                      const color = isOk ? '#22c55e' : comp.status === 'paused' ? '#f59e0b' : '#ef4444';
+                      return (
+                        <tr key={key} style={{ borderTop: '1px solid #0f1929' }}>
+                          <td style={{ padding: '6px 8px', color: '#94a3b8' }}>{comp.label || key}</td>
+                          <td style={{ padding: '6px 8px' }}>
+                            <span style={{ color, fontWeight: 700 }}>{comp.status?.toUpperCase()}</span>
+                          </td>
+                          <td style={{ padding: '6px 8px', color: '#64748b', maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {comp.error || '—'}
+                          </td>
+                          <td style={{ padding: '6px 8px', color: '#64748b' }}>
+                            {comp.lastCheck
+                              ? new Date(comp.lastCheck).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', second: '2-digit' })
+                              : '—'}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+
         {tab === 'Settings' && (
           <div style={{ maxWidth: 500 }}>
             <h2 style={{ color: '#e2e8f0', marginBottom: 16 }}>Settings</h2>
@@ -331,6 +476,7 @@ export default function App() {
                 ['Max Positions',  '3 concurrent'],
                 ['Min Confidence', '75%'],
                 ['ML Models',      'XGBoost + RF + RL (PPO)'],
+                ['Health Monitor', 'Every 30 seconds'],
                 ['Deployment',     'Railway + Vercel'],
               ].map(([label, val]) => (
                 <div key={label} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid #0f1929' }}>

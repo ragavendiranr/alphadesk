@@ -4,8 +4,9 @@ const router  = express.Router();
 const { authenticate } = require('../middleware/auth');
 const { ActivityLog }  = require('../../../database/schemas');
 const { isMarketOpen, getIST, getTodaySignalStats, SCAN_SYMBOLS } = require('../services/techSignalService');
+const healthSvc = require('../services/systemHealthService');
 
-// ── GET /api/system/status ─────────────────────────────────────────────────────
+// ── GET /api/system/status — quick status (called every 10s) ──────────────────
 router.get('/status', authenticate, async (req, res) => {
   try {
     const ist = getIST();
@@ -56,6 +57,42 @@ router.get('/status', authenticate, async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// ── GET /api/system/health — full component health (called every 30s) ──────────
+router.get('/health', authenticate, async (req, res) => {
+  try {
+    res.json(healthSvc.getHealthSummary());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET /api/system/alerts — active alerts ─────────────────────────────────────
+router.get('/alerts', authenticate, async (req, res) => {
+  try {
+    const summary = healthSvc.getHealthSummary();
+    res.json({ alerts: summary.alerts });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── POST /api/system/repair — trigger auto-repair for a component ──────────────
+router.post('/repair', authenticate, async (req, res) => {
+  const { component } = req.body;
+  if (!component) return res.status(400).json({ error: 'component required' });
+  try {
+    const steps = await healthSvc.repairComponent(component);
+    res.json({ success: true, steps, health: healthSvc.getHealthSummary() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── POST /api/system/repair/dismiss — dismiss an alert without repairing ───────
+router.post('/repair/dismiss', authenticate, (req, res) => {
+  res.json({ success: true });
 });
 
 // ── GET /api/system/activity ───────────────────────────────────────────────────
