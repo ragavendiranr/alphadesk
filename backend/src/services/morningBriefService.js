@@ -77,8 +77,12 @@ async function fetchGlobalSnapshot() {
 
 // ── Claude: classify + summarize news ────────────────────────────────────────
 async function classifyNewsWithClaude(articles) {
-  if (!ANTHROPIC_API_KEY || !articles.length) {
+  if (!articles.length) {
     return { important: [], medium: [], other: [] };
+  }
+  if (!ANTHROPIC_API_KEY) {
+    // No API key — show all articles as unclassified in 'other'
+    return { important: [], medium: [], other: articles.map(a => a.title) };
   }
   try {
     const numbered = articles.map((a, i) => `${i + 1}. [${a.source || 'News'}] ${a.title}`).join('\n');
