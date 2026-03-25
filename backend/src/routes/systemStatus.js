@@ -38,8 +38,9 @@ router.get('/status', authenticate, async (req, res) => {
       else if (mins > 15 * 60 + 30 && mins < 20 * 60) botStatus = 'POST-MARKET';
     }
 
-    // Last activity
-    const lastActivity = await ActivityLog.findOne().sort({ time: -1 }).lean();
+    // Last activity — graceful fallback if DB buffering times out
+    let lastActivity = null;
+    try { lastActivity = await ActivityLog.findOne().sort({ time: -1 }).lean(); } catch {}
 
     res.json({
       marketStatus,

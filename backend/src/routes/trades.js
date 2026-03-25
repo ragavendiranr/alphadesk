@@ -23,7 +23,12 @@ router.get('/', auth, async (req, res, next) => {
 
     const total = await Trade.countDocuments(filter);
     res.json({ trades, total });
-  } catch (err) { next(err); }
+  } catch (err) {
+    if (err.message?.includes('buffering timed out')) {
+      return res.json({ trades: [], total: 0, _dbError: 'DB reconnecting' });
+    }
+    next(err);
+  }
 });
 
 // GET /api/trades/summary — today's P&L summary

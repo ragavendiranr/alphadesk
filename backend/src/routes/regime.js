@@ -12,7 +12,12 @@ router.get('/current', auth, async (req, res, next) => {
       .sort({ timestamp: -1 });
     if (!regime) return res.json({ symbol, regime: 'UNKNOWN', confidence: 0 });
     res.json(regime);
-  } catch (err) { next(err); }
+  } catch (err) {
+    if (err.message?.includes('buffering timed out')) {
+      return res.json({ symbol: 'NIFTY 50', regime: 'UNKNOWN', confidence: 0 });
+    }
+    next(err);
+  }
 });
 
 // GET /api/regime/history
@@ -23,7 +28,12 @@ router.get('/history', auth, async (req, res, next) => {
       .sort({ timestamp: -1 })
       .limit(Number(limit));
     res.json({ symbol, history });
-  } catch (err) { next(err); }
+  } catch (err) {
+    if (err.message?.includes('buffering timed out')) {
+      return res.json({ symbol: 'NIFTY 50', history: [] });
+    }
+    next(err);
+  }
 });
 
 module.exports = router;
