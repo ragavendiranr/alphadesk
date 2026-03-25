@@ -21,7 +21,12 @@ router.get('/', auth, async (req, res, next) => {
 
     const total = await Signal.countDocuments(filter);
     res.json({ signals, total, page: Number(page), limit: Number(limit) });
-  } catch (err) { next(err); }
+  } catch (err) {
+    if (err.message?.includes('buffering timed out')) {
+      return res.json({ signals: [], total: 0, page: 1, limit: 50, _dbError: 'DB reconnecting' });
+    }
+    next(err);
+  }
 });
 
 // GET /api/signals/:id

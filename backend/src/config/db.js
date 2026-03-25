@@ -14,9 +14,13 @@ async function connectDB() {
     await mongoose.connect(uri, {
       dbName,
       serverSelectionTimeoutMS: 30000,
-      socketTimeoutMS: 60000,
-      connectTimeoutMS: 30000,
-      heartbeatFrequencyMS: 10000,
+      socketTimeoutMS:          60000,
+      connectTimeoutMS:         30000,
+      heartbeatFrequencyMS:     10000,
+      bufferTimeoutMS:          60000,  // wait up to 60s for reconnect before failing buffered ops
+      maxPoolSize:              10,
+      minPoolSize:              2,      // keep 2 connections alive to survive Atlas idle timeouts
+      maxIdleTimeMS:            270000, // close idle connections after 4.5 min (Atlas limit is 5 min)
     });
     isConnected = true;
     console.log(`✅ MongoDB connected → ${dbName}`);
