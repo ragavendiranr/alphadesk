@@ -24,7 +24,8 @@ ml-engine/src/models/saved/*.zip
 ml-engine/src/models/saved/*.joblib
 
 # ── Logs ──────────────────────────────────────────────────
-logs/
+logs/*.log
+!logs/.gitkeep
 *.log
 npm-debug.log*
 

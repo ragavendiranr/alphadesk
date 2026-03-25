@@ -1,25 +1,26 @@
-# ── Backend Dockerfile ────────────────────────────────────────────────────────
+# ── AlphaDesk Backend — Production Dockerfile ─────────────────────────────────
 FROM node:20-alpine
 
 WORKDIR /app
 
-# Install dependencies
-COPY backend/package*.json ./
-RUN npm install --production
+# Install PM2 globally for process management
+RUN npm install -g pm2
 
-# Copy source
-COPY backend/ ./backend/
-COPY database/ ./database/
+# Install backend dependencies
+COPY backend/package*.json ./backend/
+RUN cd backend && npm install --production
+
+# Copy source files
+COPY backend/   ./backend/
+COPY database/  ./database/
 COPY execution/ ./execution/
-COPY risk-manager/ ./risk-manager/
-COPY scheduler/ ./scheduler/
-COPY strategies/ ./strategies/
-COPY telegram-bot/ ./telegram-bot/
-COPY .env .env
+COPY ecosystem.config.js ./ecosystem.config.js
 
 # Create logs directory
 RUN mkdir -p logs
 
+# Expose port (Railway sets PORT dynamically)
 EXPOSE 4000
 
-CMD ["node", "backend/server.js"]
+# Start with PM2 runtime (keeps process alive + auto-restart)
+CMD ["pm2-runtime", "ecosystem.config.js", "--only", "alphadesk-api"]

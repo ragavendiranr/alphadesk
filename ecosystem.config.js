@@ -1,18 +1,25 @@
-// PM2 ecosystem config for production
+// PM2 ecosystem config — production
 module.exports = {
   apps: [
     {
-      name:    'alphadesk-api',
-      script:  'backend/server.js',
-      cwd:     __dirname,
-      env_file: '.env',
-      instances: 1,
-      exec_mode: 'fork',
-      watch: false,
-      max_restarts: 10,
-      restart_delay: 5000,
-      error_file:  'logs/api-error.log',
-      out_file:    'logs/api-out.log',
+      name:               'alphadesk-api',
+      script:             'backend/server.js',
+      cwd:                __dirname,
+      env_file:           '.env',
+      instances:          1,
+      exec_mode:          'fork',
+      watch:              false,
+      autorestart:        true,
+      max_restarts:       20,
+      restart_delay:      3000,          // 3 s between restarts
+      max_memory_restart: '300M',        // restart if RSS exceeds 300 MB
+      error_file:         './logs/err.log',
+      out_file:           './logs/out.log',
+      merge_logs:         true,
+      log_date_format:    'YYYY-MM-DD HH:mm:ss Z',
+      env: {
+        NODE_ENV: 'production',
+      },
     },
     {
       name:        'alphadesk-ml',
@@ -21,10 +28,14 @@ module.exports = {
       cwd:         `${__dirname}/ml-engine`,
       interpreter: 'none',
       env_file:    '../.env',
-      watch: false,
-      max_restarts: 5,
-      error_file:  '../logs/ml-error.log',
-      out_file:    '../logs/ml-out.log',
+      watch:       false,
+      autorestart: true,
+      max_restarts: 10,
+      restart_delay: 3000,
+      max_memory_restart: '300M',
+      error_file:  '../logs/err.log',
+      out_file:    '../logs/out.log',
+      merge_logs:  true,
     },
   ],
 };

@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { Activity, Wifi, WifiOff, Shield } from 'lucide-react';
+import useMarketStatus from '../hooks/useMarketStatus';
 
 export default function Header({ connected, systemHealth, systemStatus, fullHealth, alertCount }) {
   const [clock, setClock] = useState('');
+  const market = useMarketStatus();   // always correct from IST clock
 
   useEffect(() => {
     const tick = () => {
@@ -19,11 +21,33 @@ export default function Header({ connected, systemHealth, systemStatus, fullHeal
   const mlOk = systemHealth?.ml === 'online';
   const beOk = systemHealth?.status === 'ok';
 
-  const mktStatus = systemStatus?.marketStatus        || 'CLOSED';
-  const botStatus = systemStatus?.botStatus           || 'IDLE';
-  const sigStatus = systemStatus?.signalEngineStatus  || 'PAUSED';
+  // Market status — use hook (client-side IST) as source of truth
+  // Map PRE_OPEN → PRE-OPEN for display, fall back to API value if available
+  const rawMkt = systemStatus?.marketStatus || market.status;
+  const mktDisplay = rawMkt === 'PRE_OPEN' ? 'PRE-OPEN' : rawMkt;
+  const isMarketOpen = market.is_open;
 
-  const mktColor = { OPEN: '#22c55e', 'PRE-OPEN': '#f59e0b', 'POST-CLOSE': '#94a3b8', CLOSED: '#ef4444' };
+  // Bot status — derive from market when API hasn't loaded yet
+  const botFromApi = systemStatus?.botStatus;
+  let botStatus;
+  if (botFromApi) {
+    botStatus = botFromApi;
+  } else if (market.status === 'OPEN') {
+    botStatus = 'MONITORING';
+  } else if (market.status === 'PRE_OPEN') {
+    botStatus = 'PRE-MARKET';
+  } else {
+    botStatus = 'IDLE';
+  }
+
+  const sigStatus = systemStatus?.signalEngineStatus || (isMarketOpen ? 'ACTIVE' : 'PAUSED');
+
+  const mktColor = {
+    'OPEN':       '#22c55e',
+    'PRE-OPEN':   '#f59e0b',
+    'POST-CLOSE': '#94a3b8',
+    'CLOSED':     '#ef4444',
+  };
   const sigColor = sigStatus === 'ACTIVE' ? '#22c55e' : '#64748b';
 
   const lastCheckTime = fullHealth?.lastCheck
@@ -54,9 +78,9 @@ export default function Header({ connected, systemHealth, systemStatus, fullHeal
         {/* Market Status */}
         <StatusChip
           label="MARKET"
-          value={mktStatus}
-          color={mktColor[mktStatus] || '#64748b'}
-          pulse={mktStatus === 'OPEN'}
+          value={mktDisplay}
+          color={mktColor[mktDisplay] || '#64748b'}
+          pulse={mktDisplay === 'OPEN'}
         />
 
         {/* Bot Status */}
@@ -64,6 +88,7 @@ export default function Header({ connected, systemHealth, systemStatus, fullHeal
           label="BOT"
           value={botStatus}
           color={botStatus === 'MONITORING' ? '#22c55e' : botStatus === 'PRE-MARKET' ? '#f59e0b' : '#64748b'}
+          pulse={botStatus === 'MONITORING'}
         />
 
         {/* Signal Engine */}
@@ -74,7 +99,7 @@ export default function Header({ connected, systemHealth, systemStatus, fullHeal
           pulse={sigStatus === 'ACTIVE'}
         />
 
-        {/* System Monitor Active */}
+        {/* System Monitor */}
         <div style={{
           display: 'flex', alignItems: 'center', gap: 5,
           background: '#0a1628', borderRadius: 5, padding: '3px 8px',
@@ -87,7 +112,7 @@ export default function Header({ connected, systemHealth, systemStatus, fullHeal
           )}
         </div>
 
-        {/* Alert count badge */}
+        {/* Alert badge */}
         {alertCount > 0 && (
           <div style={{
             background: '#7f1d1d', color: '#fca5a5', border: '1px solid #ef4444',
@@ -98,7 +123,6 @@ export default function Header({ connected, systemHealth, systemStatus, fullHeal
           </div>
         )}
 
-        {/* Signals today */}
         {systemStatus?.signalStats && (
           <div style={{ fontSize: 11, color: '#94a3b8', background: '#1a2035', borderRadius: 4, padding: '2px 8px', border: '1px solid #2d3a5a' }}>
             {systemStatus.signalStats.total} signals today

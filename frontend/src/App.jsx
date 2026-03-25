@@ -22,6 +22,8 @@ import InvestPanel         from './components/InvestPanel';
 import ActivityLog         from './components/ActivityLog';
 import SignalEnginePanel   from './components/SignalEnginePanel';
 import SystemHealthPanel   from './components/SystemHealthPanel';
+import MultiChartPanel    from './components/MultiChartPanel';
+import LivePrices         from './components/LivePrices';
 
 import useWebSocket from './hooks/useWebSocket';
 import useTrades    from './hooks/useTrades';
@@ -33,7 +35,7 @@ const setAuthHeader = (token) => {
 };
 
 const TABS = [
-  'Dashboard', 'Signals', 'Trades', 'ML Engine',
+  'Dashboard', 'Charts', 'Signals', 'Trades', 'ML Engine',
   'Regime', 'Sentiment', 'Backtest', 'Options',
   'Journal', 'Risk', 'News & Market', 'Invest', 'System', 'Settings',
 ];
@@ -56,6 +58,10 @@ export default function App() {
   const [systemStatus, setSystemStatus] = useState(null);
   const [fullHealth,   setFullHealth]   = useState(null);   // detailed component health
   const [wsAlerts,     setWsAlerts]     = useState([]);      // alerts from WS
+  const [livePrices,   setLivePrices]   = useState({});     // Twelve Data live prices
+  const [activeMarket, setActiveMarket] = useState(        // global market context
+    () => { try { return JSON.parse(localStorage.getItem('alphadesk_chart_config'))?.market || 'NSE'; } catch { return 'NSE'; } }
+  );
 
   const { connected, ticks, tradeUpdates, newSignals, subscribe,
           systemHealth: wsHealth, systemAlerts } = useWebSocket();
@@ -100,12 +106,21 @@ export default function App() {
       loadDashboardData();
       loadSystemStatus();
       loadFullHealth();
+      loadLivePrices();
       const id1 = setInterval(loadDashboardData,  30_000);
       const id2 = setInterval(loadSystemStatus,   10_000);
       const id3 = setInterval(loadFullHealth,     30_000);
-      return () => { clearInterval(id1); clearInterval(id2); clearInterval(id3); };
+      const id4 = setInterval(loadLivePrices,     15_000);
+      return () => { clearInterval(id1); clearInterval(id2); clearInterval(id3); clearInterval(id4); };
     }
   }, [token]);
+
+  async function loadLivePrices() {
+    try {
+      const { data } = await api.get('/api/market/prices');
+      if (data?.prices) setLivePrices(data.prices);
+    } catch {}
+  }
 
   async function loadSystemStatus() {
     try {
@@ -209,7 +224,7 @@ export default function App() {
         fullHealth={fullHealth}
         alertCount={allAlerts.length}
       />
-      <TickerBar ticks={ticks} />
+      <TickerBar ticks={Object.keys(ticks).length > 0 ? ticks : livePrices} />
 
       {/* Persistent alert bar — shows on any tab */}
       {allAlerts.length > 0 && tab !== 'System' && (
@@ -254,6 +269,23 @@ export default function App() {
           marginLeft: 'auto', background: '#1e3a5f', color: '#3b82f6', border: '1px solid #3b82f6',
           borderRadius: 6, padding: '6px 12px', cursor: 'pointer', fontSize: 12, whiteSpace: 'nowrap', alignSelf: 'center',
         }}>💰 Budget</button>
+        {/* Active market pill — visible on all tabs */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 3, marginLeft: 4 }}>
+          {['NSE','Crypto','Forex'].map(m => {
+            const color = m === 'NSE' ? '#f97316' : m === 'Crypto' ? '#f59e0b' : '#22c55e';
+            const active = activeMarket === m;
+            return (
+              <button key={m} onClick={() => { setActiveMarket(m); setTab('Charts'); }} style={{
+                background:   active ? color + '22' : 'transparent',
+                color:        active ? color : '#475569',
+                border:       `1px solid ${active ? color + '55' : 'transparent'}`,
+                borderRadius: 4, padding: '3px 7px', cursor: 'pointer',
+                fontSize: 10, fontWeight: active ? 700 : 400,
+              }}>{m}</button>
+            );
+          })}
+        </div>
+
         <button onClick={() => { localStorage.removeItem('alphadesk_token'); setToken(null); }} style={{
           background: 'none', color: '#64748b', border: 'none', cursor: 'pointer', fontSize: 12, padding: '0 8px',
         }}>Logout</button>
@@ -269,9 +301,20 @@ export default function App() {
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16 }}>
               {/* Left: Signals */}
               <div>
-                <h3 style={{ color: '#e2e8f0', marginBottom: 10, fontSize: 14 }}>
-                  Pending Signals ({signals.filter(s => s.status === 'PENDING').length})
-                </h3>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+                  <h3 style={{ color: '#e2e8f0', fontSize: 14, margin: 0 }}>
+                    Pending Signals ({signals.filter(s => s.status === 'PENDING').length})
+                  </h3>
+                  {activeMarket !== 'NSE' && (
+                    <span style={{
+                      fontSize: 10, padding: '2px 7px', borderRadius: 4,
+                      background: activeMarket === 'Crypto' ? '#451a03' : '#052e16',
+                      color: activeMarket === 'Crypto' ? '#f59e0b' : '#22c55e',
+                      border: `1px solid ${activeMarket === 'Crypto' ? '#f59e0b44' : '#22c55e44'}`,
+                      fontWeight: 700,
+                    }}>{activeMarket} signals — coming soon</span>
+                  )}
+                </div>
                 {signals.filter(s => s.status === 'PENDING').slice(0, 5).map(s => (
                   <SignalCard key={s._id} signal={s} onAction={handleSignalAction} />
                 ))}
@@ -301,7 +344,10 @@ export default function App() {
                 )}
                 <TradeLog trades={openTrades} title={`Open Positions (${openTrades.length})`} />
                 <div style={{ marginTop: 14 }}>
-                  <PerfChart data={equityCurve} />
+                  {equityCurve.length > 1
+                    ? <PerfChart data={equityCurve} />
+                    : <LivePrices />
+                  }
                 </div>
               </div>
 
@@ -320,6 +366,13 @@ export default function App() {
               <ActivityLog token={token} />
             </div>
           </div>
+        )}
+
+        {tab === 'Charts' && (
+          <MultiChartPanel
+            initialMarket={activeMarket}
+            key={activeMarket}
+          />
         )}
 
         {tab === 'Signals' && (

@@ -28,6 +28,7 @@ const sentimentRoutes = require('./src/routes/sentiment');
 const regimeRoutes    = require('./src/routes/regime');
 const reportRoutes    = require('./src/routes/reports');
 const marketIntelRoutes = require('./src/routes/marketIntelligence');
+const newsMarketRoutes  = require('./src/routes/newsMarket');
 const investRoutes    = require('./src/routes/invest');
 const systemRoutes    = require('./src/routes/systemStatus');
 
@@ -39,8 +40,8 @@ app.use(helmet());
 const allowedOrigins = [
   process.env.FRONTEND_URL,
   'http://localhost:3000',
+  'https://alphadesk-eakgqieoq-ragavenditras-projects.vercel.app',
   'https://alphadesk.vercel.app',
-  'https://alphadesk-ragavendiranr.vercel.app',
 ].filter(Boolean);
 
 const isAllowedOrigin = (origin) => {
@@ -82,8 +83,22 @@ app.use('/api/sentiment', sentimentRoutes);
 app.use('/api/regime',    regimeRoutes);
 app.use('/api/reports',      reportRoutes);
 app.use('/api/market-intel', marketIntelRoutes);
+app.use('/api/news-market',  newsMarketRoutes);
 app.use('/api/invest',       investRoutes);
 app.use('/api/system',       systemRoutes);
+
+// ── Root ping — lightweight keep-alive for cloud platforms ───────────────────
+const _startedAt = Date.now();
+app.get('/', (req, res) => {
+  const uptimeSecs = Math.floor((Date.now() - _startedAt) / 1000);
+  const h = Math.floor(uptimeSecs / 3600);
+  const m = Math.floor((uptimeSecs % 3600) / 60);
+  res.json({
+    status:     'ok',
+    uptime:     `${h}h ${m}m`,
+    activeJobs: global._activeJobCount || 0,
+  });
+});
 
 // ── Health endpoint ───────────────────────────────────────────────────────────
 app.get('/health', async (req, res) => {
@@ -126,6 +141,26 @@ async function start() {
     // Start scheduler
     require('../scheduler').start();
     logger.info('✅ All services started', { module: 'server' });
+
+    // Notify Telegram that the monitor is live
+    const _tgToken  = process.env.TELEGRAM_BOT_TOKEN;
+    const _tgChatId = process.env.TELEGRAM_CHAT_ID;
+    if (_tgToken && _tgChatId) {
+      const https = require('https');
+      const msg   = encodeURIComponent('✅ Monitor is LIVE on cloud. Resuming pending jobs...');
+      const url   = `https://api.telegram.org/bot${_tgToken}/sendMessage?chat_id=${_tgChatId}&text=${msg}`;
+      https.get(url, () => {}).on('error', () => {});
+    }
+
+    // ── Self-ping keep-alive (prevents Render free-tier sleep) ───────────────
+    // Render sleeps services after 15 min of no traffic; a self-request every
+    // 14 min keeps the process alive so cron jobs never miss their schedule.
+    const _selfUrl = process.env.BACKEND_URL || `http://localhost:${PORT}`;
+    setInterval(() => {
+      const mod = _selfUrl.startsWith('https') ? require('https') : require('http');
+      mod.get(`${_selfUrl}/`, () => {}).on('error', () => {});
+      logger.info('Keep-alive ping sent', { module: 'server' });
+    }, 14 * 60 * 1000); // every 14 minutes
   });
 }
 

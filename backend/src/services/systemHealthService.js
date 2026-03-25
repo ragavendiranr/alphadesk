@@ -17,9 +17,12 @@ const STATUS = {
 
 // Active alerts (deduplicated by component)
 const activeAlerts = new Map();
+// Repair attempt tracking: { component → { count, lastAttempt, escalated } }
+const repairAttempts = new Map();
 let   io            = null;
 let   monitorLoop   = null;
 let   lastCheckTime = null;
+let   noSignalReason = 'System initializing';
 
 // ── Start / Stop ───────────────────────────────────────────────────────────────
 function start(socketIo) {
@@ -141,45 +144,66 @@ async function checkBrokerApi() {
 
 async function checkStrategyEngine() {
   try {
-    const { ActivityLog } = require('../../../database/schemas');
+    const { Signal }       = require('../../../database/schemas');
     const { isMarketOpen } = require('./techSignalService');
-    const last = await ActivityLog.findOne({ module: 'signalScan' }).sort({ time: -1 }).lean();
 
-    if (!isMarketOpen()) { set('strategyEngine', 'paused', 'Market closed'); clearAlert('strategyEngine'); return; }
-
-    if (!last) {
-      set('strategyEngine', 'idle', 'No scan recorded yet');
-      triggerAlert('strategyEngine', 'STRATEGY_IDLE',
-        'Strategy Engine Idle During Market Hours',
-        'No signal scan has been executed today.');
+    if (!isMarketOpen()) {
+      noSignalReason = 'Market is closed — signal scan paused';
+      set('strategyEngine', 'paused', 'Market closed');
+      clearAlert('strategyEngine');
       return;
     }
-    const ageMin = (Date.now() - new Date(last.time).getTime()) / 60_000;
+
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const todaySignals = await Signal.countDocuments({ createdAt: { $gte: today } });
+    const last = await Signal.findOne({ createdAt: { $gte: today } }).sort({ createdAt: -1 }).lean();
+    const ageMin = last ? (Date.now() - new Date(last.createdAt).getTime()) / 60_000 : Infinity;
+
+    if (STATUS.database.status !== 'connected') {
+      noSignalReason = 'Database disconnected — cannot fetch market data for scan';
+    } else if (STATUS.brokerApi.status !== 'authenticated') {
+      noSignalReason = 'Broker API offline — no live tick data for strategy engine';
+    } else if (todaySignals === 0) {
+      noSignalReason = 'No signals generated today — market opened but strategy scan found no qualifying setups';
+    } else if (ageMin > 10) {
+      noSignalReason = `Last signal was ${ageMin.toFixed(0)} minutes ago — engine running but no recent setups`;
+    } else {
+      noSignalReason = `${todaySignals} signal(s) generated today — engine running normally`;
+    }
+
     if (ageMin > 10) {
       set('strategyEngine', 'idle', `Last scan ${ageMin.toFixed(0)}m ago`);
       triggerAlert('strategyEngine', 'STRATEGY_IDLE',
         'Strategy Engine Idle During Market Hours',
-        `Last scan was ${ageMin.toFixed(0)} minutes ago.`);
+        `${noSignalReason}`);
     } else {
-      set('strategyEngine', 'running');
+      set('strategyEngine', 'running', `${todaySignals} signals today`);
       clearAlert('strategyEngine');
     }
   } catch (err) { set('strategyEngine', 'unknown', err.message); }
 }
 
 async function checkNewsFeed() {
-  const key = process.env.NEWS_API_KEY;
-  if (!key) { set('newsFeed', 'unconfigured', 'NEWS_API_KEY not set'); return; }
   try {
-    const { data } = await axios.get(
-      `https://newsapi.org/v2/top-headlines?country=in&category=business&pageSize=1&apiKey=${key}`,
-      { timeout: 8_000 }
-    );
-    if (data.status === 'ok') { set('newsFeed', 'active'); clearAlert('newsFeed'); }
-    else { set('newsFeed', 'error', data.message); triggerAlert('newsFeed', 'NEWS_FEED_ERROR', 'News Feed Error', data.message); }
+    const { MarketNews } = require('../../../database/schemas');
+    // Check if we have recent news in the DB (within last 2 hours)
+    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    const recentCount = await MarketNews.countDocuments({ publishedAt: { $gte: twoHoursAgo } });
+    const totalCount  = await MarketNews.countDocuments({});
+
+    if (recentCount > 0) {
+      set('newsFeed', 'active');
+      clearAlert('newsFeed');
+    } else if (totalCount > 0) {
+      const latest = await MarketNews.findOne().sort({ publishedAt: -1 }).select('publishedAt').lean();
+      const ageMin = latest ? Math.round((Date.now() - new Date(latest.publishedAt).getTime()) / 60000) : null;
+      set('newsFeed', 'stale', ageMin ? `Last article ${ageMin}m ago` : 'No recent articles');
+    } else {
+      set('newsFeed', 'no_data', 'No news articles in DB yet');
+      triggerAlert('newsFeed', 'NEWS_FEED_EMPTY', 'News Feed Empty', 'No articles in database');
+    }
   } catch (err) {
-    set('newsFeed', 'unavailable', err.message);
-    triggerAlert('newsFeed', 'NEWS_FEED_OFFLINE', 'News Feed Unavailable', err.message);
+    set('newsFeed', 'error', err.message);
   }
 }
 
@@ -218,8 +242,22 @@ function triggerAlert(component, code, title, detail) {
   activeAlerts.set(component, alert);
   if (io) io.emit('system:alert', alert);
 
-  sendTelegramAlert(title, detail, component).catch(() => {});
   logger.warn(`[HEALTH] ${code}: ${title}`, { module: 'healthMonitor' });
+
+  // Auto-repair: attempt up to 3 times before escalating
+  const rec = repairAttempts.get(component) || { count: 0, escalated: false };
+  if (!rec.escalated && rec.count < 3) {
+    rec.count++;
+    repairAttempts.set(component, rec);
+    const attemptNum = rec.count;
+    logger.info(`[HEALTH] Auto-repair attempt ${attemptNum}/3 for ${component}`, { module: 'healthMonitor' });
+    setImmediate(() => repairComponent(component, attemptNum));
+  } else if (!rec.escalated) {
+    rec.escalated = true;
+    repairAttempts.set(component, rec);
+    // Escalate to user after 3 failed repair attempts
+    sendTelegramEscalation(title, detail, component).catch(() => {});
+  }
 }
 
 function clearAlert(component) {
@@ -229,23 +267,48 @@ function clearAlert(component) {
   }
 }
 
-async function sendTelegramAlert(title, detail, component) {
+async function sendTelegramAlert(title, detail, component, attempt = null) {
+  try {
+    const bot = require('../../../telegram-bot/bot');
+    const attemptInfo = attempt ? ` (Auto-repair attempt ${attempt}/3)` : '';
+    await bot.sendSystemAlert(
+      `⚠️ *ERROR ALERT*${attemptInfo}\n\n` +
+      `*Issue:* ${title}\n` +
+      `*Component:* ${component}\n` +
+      `*Status:* Failed\n` +
+      `*Detail:* ${detail}\n\n` +
+      `*Action Taken:*\n• Auto-repair triggered automatically\n\n` +
+      `*Next Step:*\n• ${attempt && attempt < 3 ? `Retry ${attempt}/3 in progress` : 'Awaiting repair result'}`
+    );
+  } catch {}
+}
+
+async function sendTelegramEscalation(title, detail, component) {
+  const MANUAL_FIX = {
+    brokerApi:      'Run /repair broker in Telegram or re-login to Zerodha manually',
+    aiEngine:       'Check Anthropic API credits at console.anthropic.com',
+    database:       'Check MongoDB Atlas cluster status',
+    marketData:     'Restart the backend server; check Zerodha WebSocket',
+    strategyEngine: 'Send /resume in Telegram to restart signal scan',
+    newsFeed:       'Check NEWS_API_KEY environment variable',
+  };
   try {
     const bot = require('../../../telegram-bot/bot');
     await bot.sendSystemAlert(
-      `🚨 *SYSTEM ALERT*\n\n` +
-      `*Issue:* ${title}\n` +
+      `🔴 *ESCALATION — 3 Auto-Repairs Failed*\n\n` +
       `*Component:* ${component}\n` +
+      `*Issue:* ${title}\n` +
       `*Detail:* ${detail}\n\n` +
-      `_AlphaDesk will attempt auto-repair_`
+      `*⚠️ Manual Fix Required:*\n${MANUAL_FIX[component] || 'Check server logs for details'}`
     );
   } catch {}
 }
 
 // ── Auto-repair engine ─────────────────────────────────────────────────────────
-async function repairComponent(component) {
+async function repairComponent(component, attemptNum = null) {
   const steps = [];
   const push   = (msg) => { steps.push(msg); logger.info(`[REPAIR] ${msg}`, { module: 'healthMonitor' }); };
+  const label  = attemptNum ? ` [Attempt ${attemptNum}/3]` : '';
 
   try {
     switch (component) {
@@ -329,11 +392,19 @@ async function repairComponent(component) {
     // Full re-check after repair
     await runHealthCheck();
 
+    // Check if repair succeeded — if so, reset counters
+    const newStatus = STATUS[component]?.status;
+    const succeeded = ['online', 'connected', 'running', 'authenticated', 'active', 'ready'].includes(newStatus);
+    if (succeeded && repairAttempts.has(component)) {
+      repairAttempts.delete(component);
+      logger.info(`[REPAIR] ${component} repaired successfully — counters reset`, { module: 'healthMonitor' });
+    }
+
     // Notify via Telegram
     try {
       const bot = require('../../../telegram-bot/bot');
       await bot.sendSystemAlert(
-        `🔧 *Auto-Repair Report*\n\n*Component:* ${component}\n\n` +
+        `🔧 *Auto-Repair Report${label}*\n\n*Component:* ${component}\n*Result:* ${succeeded ? '✅ Fixed' : '❌ Still failing'}\n\n` +
         steps.map(s => `• ${s}`).join('\n')
       );
     } catch {}
@@ -345,6 +416,74 @@ async function repairComponent(component) {
   return steps;
 }
 
+// ── Status report formatter ─────────────────────────────────────────────────────
+function generateStatusReport() {
+  const fmt = (s) => {
+    if (!s) return '❓ UNKNOWN';
+    const ok = ['online', 'connected', 'running', 'authenticated', 'active', 'ready'];
+    const warn = ['degraded', 'stale', 'paused', 'idle', 'no_data', 'unconfigured'];
+    if (ok.includes(s.status))   return `✅ ${s.status.toUpperCase()}`;
+    if (warn.includes(s.status)) return `⚠️ ${s.status.toUpperCase()}`;
+    return `❌ ${s.status?.toUpperCase() || 'UNKNOWN'}`;
+  };
+
+  const alerts = Array.from(activeAlerts.values());
+  const { Signal, Trade } = (() => {
+    try { return require('../../../database/schemas'); } catch { return {}; }
+  })();
+
+  return [
+    `📊 *SYSTEM STATUS UPDATE*`,
+    `_${new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })} IST_`,
+    ``,
+    `Market Data:      ${fmt(STATUS.marketData)}`,
+    `AI Engine:        ${fmt(STATUS.aiEngine)}`,
+    `Broker (Zerodha): ${fmt(STATUS.brokerApi)}`,
+    `Strategy Engine:  ${fmt(STATUS.strategyEngine)}`,
+    `News Feed:        ${fmt(STATUS.newsFeed)}`,
+    `Database:         ${fmt(STATUS.database)}`,
+    `WebSocket:        ${fmt(STATUS.webSocket)}`,
+    ``,
+    `📝 *Signal Status:*`,
+    noSignalReason,
+    ``,
+    alerts.length
+      ? `🚨 *Active Alerts (${alerts.length}):*\n` + alerts.map(a => `• ${a.title}`).join('\n')
+      : `✅ No active alerts`,
+  ].join('\n');
+}
+
+async function sendStatusReport() {
+  try {
+    const bot = require('../../../telegram-bot/bot');
+    await bot.sendSystemAlert(generateStatusReport());
+  } catch {}
+}
+
+async function sendDashboardLink(period = 'morning') {
+  try {
+    const bot    = require('../../../telegram-bot/bot');
+    const url    = process.env.FRONTEND_URL || 'https://alphadesk-eakgqieoq-ragavenditras-projects.vercel.app';
+    const alerts = Array.from(activeAlerts.values());
+    const label  = period === 'morning' ? '🌅 Morning Report' : '🌆 Evening Report';
+    const overall = alerts.length === 0 ? '✅ All systems operational' : `⚠️ ${alerts.length} active alert(s)`;
+    const { isMarketOpen } = require('./techSignalService');
+    const tradingStatus = isMarketOpen() ? '🟢 Trading Active' : '⏸️ Market Closed';
+
+    await bot.sendSystemAlert([
+      `${label} — AlphaDesk`,
+      ``,
+      `🔗 Dashboard: ${url}`,
+      ``,
+      `System: ${overall}`,
+      `Trading: ${tradingStatus}`,
+      `Signal Engine: ${STATUS.strategyEngine.status?.toUpperCase()}`,
+      ``,
+      noSignalReason,
+    ].join('\n'));
+  } catch {}
+}
+
 // ── Public API ─────────────────────────────────────────────────────────────────
 function getHealthSummary() {
   return {
@@ -352,7 +491,11 @@ function getHealthSummary() {
     alerts:        Array.from(activeAlerts.values()),
     lastCheck:     lastCheckTime?.toISOString() || null,
     wsConnections: STATUS.webSocket.connections,
+    noSignalReason,
   };
 }
 
-module.exports = { start, stop, runHealthCheck, repairComponent, getHealthSummary };
+module.exports = {
+  start, stop, runHealthCheck, repairComponent, getHealthSummary,
+  sendStatusReport, sendDashboardLink, generateStatusReport,
+};

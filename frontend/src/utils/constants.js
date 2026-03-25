@@ -1,5 +1,7 @@
-export const BACKEND_URL = "";
-export const WS_URL      = "";
+// BACKEND_URL: empty → Vercel proxy rewrites /api/* to Render (avoids CORS)
+// WS_URL: must be full Render URL — Vercel edge cannot proxy WebSocket upgrades
+export const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "";
+export const WS_URL      = import.meta.env.VITE_WS_URL      || "https://alphadesk-backend.onrender.com";
 
 export const WATCHED_SYMBOLS = [
   'NIFTY 50', 'NIFTY BANK',

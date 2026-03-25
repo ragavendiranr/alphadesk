@@ -2,6 +2,7 @@
 const mongoose = require('mongoose');
 
 let isConnected = false;
+let lastError   = null;
 
 async function connectDB() {
   if (isConnected) return;
@@ -12,8 +13,10 @@ async function connectDB() {
   try {
     await mongoose.connect(uri, {
       dbName,
-      serverSelectionTimeoutMS: 10000,
-      socketTimeoutMS: 45000,
+      serverSelectionTimeoutMS: 30000,
+      socketTimeoutMS: 60000,
+      connectTimeoutMS: 30000,
+      heartbeatFrequencyMS: 10000,
     });
     isConnected = true;
     console.log(`✅ MongoDB connected → ${dbName}`);
@@ -28,9 +31,10 @@ async function connectDB() {
       console.error('MongoDB error:', err.message);
     });
   } catch (err) {
+    lastError = err.message;
     console.error('❌ MongoDB connection failed:', err.message);
     setTimeout(connectDB, 10000);
   }
 }
 
-module.exports = { connectDB, mongoose };
+module.exports = { connectDB, mongoose, getLastError: () => lastError };

@@ -229,13 +229,27 @@ function formatMorningBrief(classified, markets, fiiDii) {
   return lines.join('\n');
 }
 
+// ── RSS fallback: MoneyControl + Economic Times ───────────────────────────────
+async function fetchRSSNews() {
+  const MC_RSS = 'https://www.moneycontrol.com/rss/MCtopnews.xml';
+  const ET_RSS = 'https://economictimes.indiatimes.com/markets/rss.cms';
+  const [mcTitles, etTitles] = await Promise.all([fetchRSS(MC_RSS), fetchRSS(ET_RSS)]);
+  const combined = [
+    ...mcTitles.map(t => ({ title: t, source: 'Moneycontrol', url: '' })),
+    ...etTitles.map(t => ({ title: t, source: 'Economic Times', url: '' })),
+  ];
+  logger.info(`RSS news fetched: ${combined.length} headlines (MC:${mcTitles.length} ET:${etTitles.length})`, { module: 'morningBrief' });
+  return combined;
+}
+
 // ── Main: generate morning brief ──────────────────────────────────────────────
 async function generateMorningBrief() {
   logger.info('Generating morning brief...', { module: 'morningBrief' });
 
-  // Fetch in parallel
-  const [newsResult, marketsResult, fiiResult] = await Promise.allSettled([
+  // Fetch in parallel — NewsAPI + RSS feeds + market data
+  const [newsResult, rssResult, marketsResult, fiiResult] = await Promise.allSettled([
     fetchNewsAPIHeadlines(),
+    fetchRSSNews(),
     fetchGlobalSnapshot(),
     (async () => {
       const { FiiDiiData } = require('../../../database/schemas');
@@ -243,7 +257,18 @@ async function generateMorningBrief() {
     })(),
   ]);
 
-  const articles = newsResult.value || [];
+  // Merge NewsAPI + RSS, deduplicate by title prefix
+  const newsAPIArticles = newsResult.value || [];
+  const rssArticles     = rssResult.value  || [];
+  const seen = new Set(newsAPIArticles.map(a => a.title.slice(0, 40).toLowerCase()));
+  const merged = [...newsAPIArticles];
+  for (const r of rssArticles) {
+    const key = r.title.slice(0, 40).toLowerCase();
+    if (!seen.has(key)) { merged.push(r); seen.add(key); }
+  }
+  const articles = merged.slice(0, 25);
+  logger.info(`News articles for brief: ${articles.length} (API:${newsAPIArticles.length} RSS:${rssArticles.length})`, { module: 'morningBrief' });
+
   const markets  = marketsResult.value || [];
   const fiiDii   = fiiResult.value || [];
 

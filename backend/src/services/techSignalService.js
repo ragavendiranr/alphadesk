@@ -90,6 +90,20 @@ function calcATR(candles, period = 14) {
   return trs.slice(-period).reduce((s, v) => s + v, 0) / period;
 }
 
+// ── Yahoo Finance symbol mapping for indices (not .NS suffix) ─────────────────
+const YF_INDEX_MAP = {
+  'NIFTY':      '^NSEI',
+  'BANKNIFTY':  '^NSEBANK',
+  'FINNIFTY':   'NIFTYFIN.NS',
+  'NIFTY 50':   '^NSEI',
+  'NIFTY BANK': '^NSEBANK',
+  'MIDCPNIFTY': 'NIFTYMIDCAP50.NS',
+};
+
+function toYFSymbol(symbol) {
+  return YF_INDEX_MAP[symbol] || (symbol + '.NS');
+}
+
 // ── Fetch OHLC data from DB or Yahoo Finance fallback ─────────────────────────
 async function fetchCandles(symbol, timeframe = '5m', limit = 60) {
   try {
@@ -104,13 +118,14 @@ async function fetchCandles(symbol, timeframe = '5m', limit = 60) {
     }
   } catch {}
 
-  // Fallback: Yahoo Finance
+  // Fallback: Yahoo Finance v8/chart (uses correct symbol mapping for indices)
   try {
     const tfMap = { '5m': '5m', '15m': '15m', '1h': '60m', '1D': '1d' };
     const yfTf  = tfMap[timeframe] || '5m';
-    const { data } = await axios.get('https://query1.finance.yahoo.com/v8/finance/chart/' + symbol + '.NS', {
+    const yfSym = toYFSymbol(symbol);
+    const { data } = await axios.get('https://query1.finance.yahoo.com/v8/finance/chart/' + yfSym, {
       params: { interval: yfTf, range: yfTf === '5m' ? '5d' : '60d' },
-      headers: { 'User-Agent': 'Mozilla/5.0' },
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
       timeout: 15000,
     });
     const result = data?.chart?.result?.[0];

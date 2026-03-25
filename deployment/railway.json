@@ -4,9 +4,9 @@
     "builder": "NIXPACKS"
   },
   "deploy": {
-    "startCommand": "node backend/server.js",
+    "startCommand": "pm2-runtime ecosystem.config.js --only alphadesk-api",
     "restartPolicyType": "ON_FAILURE",
-    "restartPolicyMaxRetries": 5,
+    "restartPolicyMaxRetries": 10,
     "healthcheckPath": "/health",
     "healthcheckTimeout": 30
   }

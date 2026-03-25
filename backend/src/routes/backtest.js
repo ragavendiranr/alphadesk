@@ -10,9 +10,22 @@ const ML_URL = () => process.env.ML_ENGINE_URL || 'http://localhost:5001';
 // POST /api/backtest/run
 router.post('/run', auth, async (req, res, next) => {
   try {
-    const { data } = await axios.post(`${ML_URL()}/backtest`, req.body, { timeout: 120000 });
-    // Save result
-    const saved = await BacktestResult.create({ ...data, runBy: req.user.id });
+    // Try ML engine first (if running)
+    try {
+      const { data } = await axios.post(`${ML_URL()}/backtest`, req.body, { timeout: 30000 });
+      const saved = await BacktestResult.create({ ...data, symbol: req.body.symbol, strategy: req.body.strategy, runBy: req.user.id });
+      return res.json({ ...data, _id: saved._id });
+    } catch (mlErr) {
+      // ML engine offline or returned error — fall through to built-in backtester
+      require('../config/logger').warn(`ML backtest unavailable (${mlErr.message}), using built-in engine`, { module: 'backtest' });
+    }
+
+    // Built-in Node.js backtest engine (no Python/ML required)
+    const backtestSvc = require('../services/backtestService');
+    const data  = await backtestSvc.runBacktest(req.body);
+    const saved = await BacktestResult.create({
+      ...data, symbol: req.body.symbol, strategy: req.body.strategy, runBy: req.user.id,
+    });
     res.json({ ...data, _id: saved._id });
   } catch (err) { next(err); }
 });

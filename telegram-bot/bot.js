@@ -66,8 +66,16 @@ bot.onText(/\/start|\/help/, (msg) => {
   safeReply(msg.chat.id, [
     '🚀 *AlphaDesk AI Trading Assistant*',
     '',
+    '*Trading Mentor*',
+    '/commentary — Live market structure + signal explanation',
+    '/learning — Weekly pattern analysis + improvement tips',
+    '',
+    '*System*',
+    '/status — Quick system health',
+    '/syshealth — Full autonomous status report',
+    '/repair [component] — Trigger auto-repair',
+    '',
     '*Trading*',
-    '/status — System health',
     '/pnl — Today P&L',
     '/positions — Open trades',
     '/signals — Last 5 signals',
@@ -103,16 +111,77 @@ bot.onText(/\/start|\/help/, (msg) => {
 bot.onText(/\/status/, async (msg) => {
   if (!isAuthorized(msg)) return unauthorized(msg.chat.id);
   try {
-    const { data } = await axios.get('http://localhost:4000/health', { timeout: 5000 });
+    const healthSvc = require('../backend/src/services/systemHealthService');
+    const summary   = healthSvc.getHealthSummary();
+    const c         = summary.components;
+    const fmt       = (s) => s === 'online' || s === 'connected' || s === 'running' || s === 'authenticated' || s === 'active' ? '✅' : '⚠️';
     safeReply(msg.chat.id, [
-      '📡 *System Status*',
-      `Backend: ${data.status === 'ok' ? '✅' : '❌'} ${data.status}`,
-      `Database: ${data.db === 'connected' ? '✅' : '❌'} ${data.db}`,
-      `ML Engine: ${data.ml === 'online' ? '✅' : '❌'} ${data.ml}`,
-      `CPU: ${data.cpu}% | RAM: ${data.memory}`,
-      `Uptime: ${Math.floor(data.uptime / 60)}m`,
+      '📡 *System Status — AlphaDesk*',
+      ``,
+      `${fmt(c.database?.status)} Database: ${c.database?.status}`,
+      `${fmt(c.aiEngine?.status)} AI Engine: ${c.aiEngine?.status}`,
+      `${fmt(c.brokerApi?.status)} Broker: ${c.brokerApi?.status}`,
+      `${fmt(c.strategyEngine?.status)} Strategy: ${c.strategyEngine?.status}`,
+      `${fmt(c.marketData?.status)} Market Data: ${c.marketData?.status}`,
+      `${fmt(c.newsFeed?.status)} News Feed: ${c.newsFeed?.status}`,
+      ``,
+      `📝 *Signal Status:*`,
+      summary.noSignalReason || 'Unknown',
+      ``,
+      summary.alerts?.length
+        ? `🚨 Active Alerts: ${summary.alerts.length}\n` + summary.alerts.map(a => `• ${a.title}`).join('\n')
+        : `✅ No active alerts`,
     ].join('\n'));
-  } catch { safeReply(msg.chat.id, '❌ Backend unreachable'); }
+  } catch (err) { safeReply(msg.chat.id, `❌ Health check error: ${err.message}`); }
+});
+
+bot.onText(/\/syshealth/, async (msg) => {
+  if (!isAuthorized(msg)) return unauthorized(msg.chat.id);
+  try {
+    const healthSvc = require('../backend/src/services/systemHealthService');
+    safeReply(msg.chat.id, healthSvc.generateStatusReport());
+  } catch (err) { safeReply(msg.chat.id, `❌ Error: ${err.message}`); }
+});
+
+bot.onText(/\/commentary/, async (msg) => {
+  if (!isAuthorized(msg)) return unauthorized(msg.chat.id);
+  safeReply(msg.chat.id, 'Generating market commentary...');
+  try {
+    const { generateMarketCommentary } = require('../backend/src/services/marketCommentaryService');
+    safeReply(msg.chat.id, await generateMarketCommentary());
+  } catch (err) { safeReply(msg.chat.id, `❌ Error: ${err.message}`); }
+});
+
+bot.onText(/\/learning/, async (msg) => {
+  if (!isAuthorized(msg)) return unauthorized(msg.chat.id);
+  safeReply(msg.chat.id, 'Generating weekly learning report...');
+  try {
+    const { Trade } = require('../database/schemas');
+    const since = new Date(); since.setDate(since.getDate() - 7);
+    const trades = await Trade.find({ entryTime: { $gte: since }, status: { $ne: 'OPEN' } }).lean();
+    if (!trades.length) return safeReply(msg.chat.id, 'No closed trades in the last 7 days.');
+    const { generateLearningReport } = require('../backend/src/services/marketCommentaryService');
+    const report = await generateLearningReport(trades);
+    safeReply(msg.chat.id, report || 'Learning report could not be generated.');
+  } catch (err) { safeReply(msg.chat.id, `❌ Error: ${err.message}`); }
+});
+
+bot.onText(/\/repair(?:\s+(\w+))?/, async (msg, match) => {
+  if (!isAuthorized(msg)) return unauthorized(msg.chat.id);
+  const component = match?.[1];
+  const valid = ['aiEngine', 'database', 'marketData', 'brokerApi', 'strategyEngine', 'newsFeed'];
+  if (!component) {
+    return safeReply(msg.chat.id, `Usage: /repair [component]\nComponents: ${valid.join(', ')}`);
+  }
+  if (!valid.includes(component)) {
+    return safeReply(msg.chat.id, `Unknown component. Valid: ${valid.join(', ')}`);
+  }
+  safeReply(msg.chat.id, `🔧 Running repair on *${component}*...`);
+  try {
+    const healthSvc = require('../backend/src/services/systemHealthService');
+    const steps     = await healthSvc.repairComponent(component);
+    safeReply(msg.chat.id, `🔧 *Repair Complete — ${component}*\n\n` + steps.map(s => `• ${s}`).join('\n'));
+  } catch (err) { safeReply(msg.chat.id, `❌ Repair failed: ${err.message}`); }
 });
 
 bot.onText(/\/pnl/, async (msg) => {
@@ -509,9 +578,18 @@ async function sendTradeOpenAlert(trade) {
 
 async function sendTradeCloseAlert(trade) {
   const pnl = trade.netPnl || 0;
-  return safeReply(CHAT_ID,
+  // Send basic close alert immediately
+  await safeReply(CHAT_ID,
     `Trade Closed: ${trade.symbol}\n\nStatus: ${trade.status}\nEntry: Rs.${trade.entryPrice} Exit: Rs.${trade.exitPrice}\nQty: ${trade.qty}\nGross P&L: Rs.${trade.pnl?.toFixed(2)}\nCharges: Rs.${trade.charges?.total?.toFixed(2)}\nNet P&L: Rs.${pnl.toFixed(2)}`
   );
+  // Then send post-trade analysis (async — don't block)
+  setImmediate(async () => {
+    try {
+      const { generatePostTradeAnalysis } = require('../backend/src/services/marketCommentaryService');
+      const analysis = await generatePostTradeAnalysis(trade);
+      await safeReply(CHAT_ID, analysis);
+    } catch {}
+  });
 }
 
 async function sendRiskAlert(msg) {

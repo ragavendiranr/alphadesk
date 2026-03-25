@@ -26,7 +26,14 @@ const WATCHED_SYMBOLS = [
 // IST timezone offset
 const IST = 'Asia/Kolkata';
 
-let scanActive = false;
+// Initialise scanActive based on current IST time (handles scheduler restarts mid-day)
+let scanActive = (() => {
+  const now  = new Date();
+  const day  = now.getUTCDay(); // 0=Sun, 6=Sat
+  if (day === 0 || day === 6) return false;
+  const istMins = (now.getUTCHours() * 60 + now.getUTCMinutes() + 330) % (24 * 60); // IST = UTC+5:30
+  return istMins >= 9 * 60 + 14 && istMins <= 15 * 60 + 10;
+})();
 let pauseUntil = null;
 
 // ── 1. 07:00 IST — Morning Brief + Zerodha Auto Login ────────────────────────
@@ -117,21 +124,48 @@ cron.schedule('35 7 * * 1-5', async () => {
 cron.schedule('45 8 * * 1-5', async () => {
   logger.info('Scheduler: Pre-market check + watchlist', { module: 'scheduler' });
   try {
-    const axios = require('axios');
-    const { data: health } = await axios.get('http://localhost:4000/health', { timeout: 5000 }).catch(() => ({ data: {} }));
+    // Call health service DIRECTLY — no HTTP round-trip to self which would fail
+    // on Railway cold-start or if the public URL is slow / sleeping
+    const { getSystemHealth } = require('../backend/src/services/healthService');
+    const health = await getSystemHealth();
+    const { checks } = health;
 
-    // Fetch and store sentiment
+    // ── Status formatter: PASS / WARN / FAIL ─────────────────────────────────
+    const fmt = (chk) => {
+      if (!chk) return 'FAIL';
+      if (chk.status === 'PASS') return `PASS (${chk.latency_ms}ms)`;
+      if (chk.status === 'WARN') return `WARN — ${chk.detail}`;
+      return `FAIL — ${chk.error_msg || chk.detail || 'unknown'}`;
+    };
+
+    // ── Sentiment: try ML engine, fall back to last stored score ─────────────
     let sentiment = { label: 'NEUTRAL', score: 50 };
-    try {
-      const { data: sent } = await axios.get(`${process.env.ML_ENGINE_URL}/sentiment`, { timeout: 30000 });
-      sentiment = sent;
-      const date = new Date().toISOString().slice(0, 10);
-      await SentimentScore.findOneAndUpdate(
-        { date, symbol: 'MARKET' },
-        { ...sentiment, date },
-        { upsert: true }
-      );
-    } catch {}
+    const mlUrl = process.env.ML_ENGINE_URL || '';
+    const mlIsLocal = !mlUrl || mlUrl.includes('localhost') || mlUrl.includes('127.0.0.1');
+
+    if (!mlIsLocal || process.env.NODE_ENV !== 'production') {
+      // Only attempt live ML sentiment if the engine has a real URL
+      try {
+        const axios = require('axios');
+        const { data: sent } = await axios.get(`${mlUrl}/sentiment`, { timeout: 10000 });
+        if (sent && sent.score !== undefined) {
+          sentiment = sent;
+          const date = new Date().toISOString().slice(0, 10);
+          await SentimentScore.findOneAndUpdate(
+            { date, symbol: 'MARKET' },
+            { ...sentiment, date },
+            { upsert: true }
+          );
+        }
+      } catch {}
+    } else {
+      // ML not deployed — use last stored sentiment from DB
+      try {
+        const lastScore = await SentimentScore.findOne({ symbol: 'MARKET' })
+          .sort({ createdAt: -1 }).lean();
+        if (lastScore) sentiment = { label: lastScore.label || 'NEUTRAL', score: lastScore.score || 50 };
+      } catch {}
+    }
 
     // Create today's budget if missing
     const date = new Date().toISOString().slice(0, 10);
@@ -141,14 +175,18 @@ cron.schedule('45 8 * * 1-5', async () => {
       { upsert: true }
     );
 
-    // System health alert
+    // ── System health Telegram alert ──────────────────────────────────────────
+    const allPass = Object.values(checks || {}).every(c => c.status === 'PASS');
+    const hasWarn = Object.values(checks || {}).some(c => c.status === 'WARN');
+    const overallIcon = allPass ? '✅' : hasWarn ? '⚠️' : '🔴';
+
     await telegramBot().sendSystemAlert([
-      'Pre-Market Check — AlphaDesk',
-      `Backend: ${health.status === 'ok' ? 'OK' : 'FAIL'}`,
-      `DB: ${health.db === 'connected' ? 'OK' : 'FAIL'}`,
-      `ML: ${health.ml === 'online' ? 'OK' : 'FAIL'}`,
+      `${overallIcon} Pre-Market Check — AlphaDesk`,
+      `Backend:   ${fmt(checks?.backend)}`,
+      `DB:        ${fmt(checks?.database)}`,
+      `ML Engine: ${fmt(checks?.ml)}`,
       `Sentiment: ${sentiment.label} (${sentiment.score}/100)`,
-      `Capital: Rs.${Number(process.env.DAILY_CAPITAL).toLocaleString('en-IN')}`,
+      `Capital:   Rs.${Number(process.env.DAILY_CAPITAL).toLocaleString('en-IN')}`,
       `Risk/Trade: ${(Number(process.env.MAX_RISK_PER_TRADE) * 100).toFixed(1)}%`,
       '',
       'Market opens in 30 minutes.',
@@ -177,9 +215,10 @@ cron.schedule('*/3 9-15 * * 1-5', async () => {
   if (!scanActive) return;
   if (pauseUntil && new Date() < pauseUntil) return;
 
-  const now = new Date();
-  const istH = (now.getUTCHours() + 5) % 24;
-  const istM = (now.getUTCMinutes() + 30) % 60;
+  const now     = new Date();
+  const istMins = (now.getUTCHours() * 60 + now.getUTCMinutes() + 330) % (24 * 60); // IST = UTC+5:30
+  const istH    = Math.floor(istMins / 60);
+  const istM    = istMins % 60;
   if (istH < 9 || (istH === 9 && istM < 15)) return;
   if (istH > 15 || (istH === 15 && istM >= 10)) return;
 
@@ -187,8 +226,25 @@ cron.schedule('*/3 9-15 * * 1-5', async () => {
   try {
     const signals = await signalService().runScanCycle(WATCHED_SYMBOLS.slice(0, 10));
     for (const sig of signals) {
-      await telegramBot().sendSignalAlert(sig);
+      // Send signal alert with full WHY explanation
+      try {
+        const { generateSignalExplanation } = require('../backend/src/services/marketCommentaryService');
+        const explanation = await generateSignalExplanation(sig);
+        await telegramBot().sendSystemAlert(explanation);
+      } catch {
+        await telegramBot().sendSignalAlert(sig);
+      }
     }
+
+    // If NO signals, send explanation (no silence rule)
+    if (signals.length === 0) {
+      try {
+        const { generateNoSignalExplanation } = require('../backend/src/services/marketCommentaryService');
+        const msg = await generateNoSignalExplanation(WATCHED_SYMBOLS.slice(0, 10));
+        await telegramBot().sendSystemAlert(msg);
+      } catch {}
+    }
+
     // Expire stale pending signals
     await signalService().expireStaleSignals();
   } catch (err) {
@@ -238,7 +294,7 @@ cron.schedule('30 12 * * 1-5', async () => {
       'Trading Performance',
       `Market Trend: ${label}`,
       `Sentiment Score: ${score}/100`,
-      `Signals Generated: ${rpt.totalTrades + 2}`,
+      `Signals Generated: ${rpt.totalSignals ?? rpt.totalTrades}`,
       `Signals Approved: ${rpt.totalTrades}`,
       `Trades Won: ${rpt.won} | Lost: ${rpt.lost}`,
       `Win Rate: ${rpt.winRate}%`,
@@ -419,6 +475,45 @@ cron.schedule('0 8 * * 1-5', async () => {
   } catch (err) {
     logger.error(`Investment price refresh failed: ${err.message}`, { module: 'scheduler' });
   }
+}, { timezone: IST });
+
+// ── A4. Every 15 min (9:15–3:30) — Market commentary (mentor mode) ───────────
+cron.schedule('*/15 9-15 * * 1-5', async () => {
+  const now     = new Date();
+  const istMins = (now.getUTCHours() * 60 + now.getUTCMinutes() + 330) % (24 * 60);
+  if (istMins < 9 * 60 + 15 || istMins > 15 * 60 + 30) return;
+
+  try {
+    const { generateMarketCommentary } = require('../backend/src/services/marketCommentaryService');
+    const commentary = await generateMarketCommentary();
+    await telegramBot().sendSystemAlert(commentary);
+  } catch (err) {
+    logger.error(`Market commentary failed: ${err.message}`, { module: 'scheduler' });
+  }
+}, { timezone: IST });
+
+// ── A1. 08:30 IST daily — Morning dashboard link ──────────────────────────────
+cron.schedule('30 8 * * 1-5', async () => {
+  try {
+    const healthSvc = require('../backend/src/services/systemHealthService');
+    await healthSvc.sendDashboardLink('morning');
+  } catch (err) { logger.error(`Morning link failed: ${err.message}`, { module: 'scheduler' }); }
+}, { timezone: IST });
+
+// ── A2. 18:30 IST daily — Evening dashboard link ──────────────────────────────
+cron.schedule('30 18 * * 1-5', async () => {
+  try {
+    const healthSvc = require('../backend/src/services/systemHealthService');
+    await healthSvc.sendDashboardLink('evening');
+  } catch (err) { logger.error(`Evening link failed: ${err.message}`, { module: 'scheduler' }); }
+}, { timezone: IST });
+
+// ── A3. Every 30 min (8am–6pm) — Autonomous status report ────────────────────
+cron.schedule('*/30 8-18 * * 1-5', async () => {
+  try {
+    const healthSvc = require('../backend/src/services/systemHealthService');
+    await healthSvc.sendStatusReport();
+  } catch (err) { logger.error(`Status report failed: ${err.message}`, { module: 'scheduler' }); }
 }, { timezone: IST });
 
 // ── 12. 1st of month 07:00 — Monthly review ──────────────────────────────────
